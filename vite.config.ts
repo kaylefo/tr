@@ -11,8 +11,10 @@ function resolveBuildId(): string {
   }
 }
 
+const appBase = process.env.GITHUB_PAGES === 'true' ? '/tr/' : './';
+
 export default defineConfig({
-  base: process.env.GITHUB_PAGES === 'true' ? '/tr/' : './',
+  base: appBase,
   define: {
     __BUILD_ID__: JSON.stringify(resolveBuildId()),
   },
@@ -22,9 +24,48 @@ export default defineConfig({
       registerType: 'prompt',
       injectRegister: 'auto',
       includeAssets: ['icons/*.png', 'icons/*.svg'],
-      manifest: false,
+      manifest: {
+        name: 'Japan Pocket',
+        short_name: 'Japan Pocket',
+        description:
+          'Yen converter and offline Japanese-to-English translator for travel in Japan.',
+        id: appBase,
+        start_url: appBase,
+        scope: appBase,
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        background_color: '#f7f4ef',
+        theme_color: '#f7f4ef',
+        icons: [
+          {
+            src: `${appBase}icons/icon-192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: `${appBase}icons/icon-192-maskable.png`,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+          {
+            src: `${appBase}icons/icon-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: `${appBase}icons/icon-512-maskable.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
       workbox: {
         maximumFileSizeToCacheInBytes: 25 * 1024 * 1024,
+        // Traineddata is cached by Tesseract after the user downloads a pack.
+        // Pre-caching every profile makes initial SW installation >50 MB and
+        // can cause iOS to kill/reload the page.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//],
@@ -74,6 +115,33 @@ export default defineConfig({
             options: {
               cacheName: 'jp-tessdata-best-v1',
               expiration: { maxEntries: 16, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@tesseract\.js-data\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tessdata-jsdelivr-v1',
+              expiration: { maxEntries: 24, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/tesseract\.js/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tesseract-js-v1',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/tesseract\.js-core/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tesseract-core-v1',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },

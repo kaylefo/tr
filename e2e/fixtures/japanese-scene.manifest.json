@@ -1,0 +1,14 @@
+{
+  "width": 1200,
+  "height": 1600,
+  "description": "Mixed horizontal/vertical Japanese signage with occlusion and low contrast",
+  "expectedFragments": [
+    "ラーメン",
+    "営業",
+    "出口",
+    "禁煙",
+    "880",
+    "いくら"
+  ],
+  "minimumMatches": 4
+}

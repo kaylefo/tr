@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { OfflinePackRecord } from '../modules/storage/packStore';
-import { translationService } from '../modules/translation/translationService';
+import { languagePackManager } from '../modules/languagePack/languagePackManager';
+import { formatProgressLabel } from '../modules/languagePack/progress';
 
 interface OfflinePackPanelProps {
   pack: OfflinePackRecord | null;
@@ -34,7 +35,28 @@ function executionLabel(mode?: 'webgpu' | 'wasm'): string {
 
 export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPanelProps) {
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<string>('');
+  const [progressLabel, setProgressLabel] = useState('');
+  const [progressPercent, setProgressPercent] = useState(0);
+
+  useEffect(() => {
+    const unsubs = [
+      languagePackManager.subscribeTranslationProgress((progress) => {
+        setProgressLabel(formatProgressLabel(progress));
+        setProgressPercent(progress.progress);
+      }),
+      languagePackManager.subscribeTranslationReady(() => {
+        setProgressLabel('');
+        setProgressPercent(100);
+        setBusy(false);
+        void onPackChange();
+      }),
+      languagePackManager.subscribeTranslationError(() => {
+        setBusy(false);
+        void onPackChange();
+      }),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [onPackChange]);
 
   const download = async () => {
     if (!isOnline) return;
@@ -46,29 +68,9 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
       return;
     }
     setBusy(true);
-    setProgress('Starting download…');
-    translationService.setListeners({
-      onProgress: (p) => {
-        const pct =
-          p.progress != null
-            ? `${Math.round(p.progress)}%`
-            : p.loaded && p.total
-              ? `${Math.round((p.loaded / p.total) * 100)}%`
-              : '';
-        setProgress(`${p.status}${p.file ? `: ${p.file}` : ''} ${pct}`.trim());
-      },
-      onReady: () => {
-        setProgress('');
-        setBusy(false);
-        void onPackChange();
-      },
-      onError: () => {
-        setBusy(false);
-        void onPackChange();
-      },
-    });
+    setProgressLabel('Starting download…');
     try {
-      await translationService.downloadAndInitialize(isOnline);
+      await languagePackManager.downloadTranslationPack(isOnline);
     } catch {
       /* surfaced via pack state */
     } finally {
@@ -77,12 +79,10 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
     }
   };
 
-  const repair = () => download();
-
   const remove = async () => {
     if (!window.confirm('Delete the offline translation pack? The app will remain installed.')) return;
     setBusy(true);
-    await translationService.deletePack();
+    await languagePackManager.deleteTranslationPack();
     setBusy(false);
     await onPackChange();
   };
@@ -90,6 +90,8 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
   const validated = pack?.lastValidatedAt
     ? new Date(pack.lastValidatedAt).toLocaleString()
     : null;
+
+  const barPercent = pack?.status === 'ready' ? 100 : progressPercent;
 
   return (
     <div className="offline-pack" aria-labelledby="offline-pack-heading">
@@ -117,10 +119,10 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
             <dd>{validated}</dd>
           </div>
         ) : null}
-        {progress ? (
+        {progressLabel ? (
           <div>
             <dt>Progress</dt>
-            <dd>{progress}</dd>
+            <dd>{progressLabel}</dd>
           </div>
         ) : null}
         {pack?.errorMessage ? (
@@ -131,6 +133,19 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
         ) : null}
       </dl>
 
+      {(busy || pack?.status === 'downloading' || pack?.status === 'preparing') ? (
+        <div
+          className="vision-component__bar offline-pack__bar"
+          role="progressbar"
+          aria-valuenow={barPercent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Translation pack download progress"
+        >
+          <span style={{ width: `${Math.max(0, Math.min(100, barPercent))}%` }} />
+        </div>
+      ) : null}
+
       <div className="action-row">
         {pack?.status !== 'ready' ? (
           <button type="button" className="button" disabled={!isOnline || busy} onClick={() => void download()}>
@@ -138,7 +153,7 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
           </button>
         ) : (
           <>
-            <button type="button" className="button button--secondary" disabled={!isOnline || busy} onClick={() => void repair()}>
+            <button type="button" className="button button--secondary" disabled={!isOnline || busy} onClick={() => void download()}>
               Repair / redownload
             </button>
             <button type="button" className="button button--danger" disabled={busy} onClick={() => void remove()}>
@@ -147,7 +162,7 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
           </>
         )}
         {pack?.status === 'failed' ? (
-          <button type="button" className="button" disabled={!isOnline || busy} onClick={() => void repair()}>
+          <button type="button" className="button" disabled={!isOnline || busy} onClick={() => void download()}>
             Retry
           </button>
         ) : null}

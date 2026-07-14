@@ -1,4 +1,8 @@
-import { VISION_OCR_MIN_CONFIDENCE, VISION_PHOTO_MAX_DIMENSION } from '../../config/vision';
+import {
+  VISION_LIVE_MAX_DIMENSION,
+  VISION_OCR_MIN_CONFIDENCE,
+  VISION_PHOTO_MAX_DIMENSION,
+} from '../../config/vision';
 import type { OcrLineBox } from './ocrMessages';
 
 const JAPANESE_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\u3000-\u303f]/;
@@ -7,9 +11,51 @@ export function containsJapanese(text: string): boolean {
   return JAPANESE_RE.test(text);
 }
 
-export function preprocessCanvas(source: HTMLCanvasElement): ImageData {
-  const maxDim = VISION_PHOTO_MAX_DIMENSION;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function computeCoverTransform(
+  sourceWidth: number,
+  sourceHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { scale: number; offsetX: number; offsetY: number } {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || displayWidth <= 0 || displayHeight <= 0) {
+    return { scale: 1, offsetX: 0, offsetY: 0 };
+  }
+
+  const sourceAspect = sourceWidth / sourceHeight;
+  const displayAspect = displayWidth / displayHeight;
+
+  if (sourceAspect > displayAspect) {
+    const scale = displayHeight / sourceHeight;
+    return {
+      scale,
+      offsetX: (displayWidth - sourceWidth * scale) / 2,
+      offsetY: 0,
+    };
+  }
+
+  const scale = displayWidth / sourceWidth;
+  return {
+    scale,
+    offsetX: 0,
+    offsetY: (displayHeight - sourceHeight * scale) / 2,
+  };
+}
+
+export function assertValidImageDimensions(width: number, height: number): void {
+  if (width <= 0 || height <= 0) {
+    throw new Error('Image has no pixels. Wait for the camera to focus or choose another photo.');
+  }
+}
+
+export function preprocessCanvas(source: HTMLCanvasElement, mode: 'photo' | 'live' = 'photo'): ImageData {
+  const maxDim = mode === 'live' ? VISION_LIVE_MAX_DIMENSION : VISION_PHOTO_MAX_DIMENSION;
   let { width, height } = source;
+
+  assertValidImageDimensions(width, height);
   if (width > maxDim || height > maxDim) {
     const scale = maxDim / Math.max(width, height);
     width = Math.round(width * scale);
@@ -42,32 +88,59 @@ export function preprocessCanvas(source: HTMLCanvasElement): ImageData {
 }
 
 export function captureVideoFrame(video: HTMLVideoElement): HTMLCanvasElement {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  if (width <= 0 || height <= 0) {
+    throw new Error('Camera frame not ready. Wait a moment and try again.');
+  }
+
   const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas unavailable');
-  ctx.drawImage(video, 0, 0);
+  ctx.drawImage(video, 0, 0, width, height);
   return canvas;
 }
 
-export function filterOcrLines(lines: OcrLineBox[]): OcrLineBox[] {
+export async function waitForVideoFrame(
+  video: HTMLVideoElement,
+  timeoutMs = 5000,
+): Promise<HTMLCanvasElement> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return captureVideoFrame(video);
+    }
+    await sleep(50);
+  }
+  throw new Error('Camera frame not ready. Point the camera at text and wait a moment.');
+}
+
+export function filterOcrLines(lines: OcrLineBox[], minConfidence = VISION_OCR_MIN_CONFIDENCE): OcrLineBox[] {
   return lines.filter((line) => {
     const text = line.text.trim();
     if (!text || !containsJapanese(text)) return false;
-    if (line.confidence < VISION_OCR_MIN_CONFIDENCE) return false;
+    if (line.confidence > 0 && line.confidence < minConfidence) return false;
     return true;
   });
 }
 
-export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
+function lineOrientation(line: OcrLineBox): 'horizontal' | 'vertical' {
+  const w = Math.max(1, line.bbox.x1 - line.bbox.x0);
+  const h = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  if (h > w * 1.35 && line.text.length <= 6) return 'vertical';
+  return 'horizontal';
+}
+
+function mergeHorizontalLines(lines: OcrLineBox[]): OcrLineBox[] {
   if (lines.length <= 1) return lines;
   const sorted = [...lines].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
   const merged: OcrLineBox[] = [];
   for (const line of sorted) {
     const last = merged.at(-1);
     if (!last) {
-      merged.push(line);
+      merged.push({ ...line });
       continue;
     }
     const verticalGap = line.bbox.y0 - last.bbox.y1;
@@ -82,10 +155,53 @@ export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
       };
       last.words = [...last.words, ...line.words];
     } else {
-      merged.push(line);
+      merged.push({ ...line });
     }
   }
   return merged;
+}
+
+function mergeVerticalLines(lines: OcrLineBox[]): OcrLineBox[] {
+  if (lines.length <= 1) return lines;
+  const sorted = [...lines].sort((a, b) => a.bbox.x0 - b.bbox.x0 || a.bbox.y0 - b.bbox.y0);
+  const merged: OcrLineBox[] = [];
+  for (const line of sorted) {
+    const last = merged.at(-1);
+    if (!last) {
+      merged.push({ ...line });
+      continue;
+    }
+    const horizontalGap = line.bbox.x0 - last.bbox.x1;
+    const verticalGap = line.bbox.y0 - last.bbox.y1;
+    if (horizontalGap < 24 && verticalGap < 36) {
+      last.text = `${last.text}${line.text}`.trim();
+      last.confidence = (last.confidence + line.confidence) / 2;
+      last.bbox = {
+        x0: Math.min(last.bbox.x0, line.bbox.x0),
+        y0: Math.min(last.bbox.y0, line.bbox.y0),
+        x1: Math.max(last.bbox.x1, line.bbox.x1),
+        y1: Math.max(last.bbox.y1, line.bbox.y1),
+      };
+      last.words = [...last.words, ...line.words];
+    } else {
+      merged.push({ ...line });
+    }
+  }
+  return merged;
+}
+
+export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
+  if (lines.length <= 1) return lines;
+  const horizontal: OcrLineBox[] = [];
+  const vertical: OcrLineBox[] = [];
+  for (const line of lines) {
+    if (lineOrientation(line) === 'vertical') {
+      vertical.push(line);
+    } else {
+      horizontal.push(line);
+    }
+  }
+  return [...mergeHorizontalLines(horizontal), ...mergeVerticalLines(vertical)];
 }
 
 export interface OverlayLabel {
@@ -103,9 +219,20 @@ export function mapOverlayLabels(
   sourceHeight: number,
   displayWidth: number,
   displayHeight: number,
+  useCoverTransform = true,
 ): OverlayLabel[] {
-  const scaleX = displayWidth / sourceWidth;
-  const scaleY = displayHeight / sourceHeight;
+  const { scale, offsetX, offsetY } = useCoverTransform
+    ? computeCoverTransform(sourceWidth, sourceHeight, displayWidth, displayHeight)
+    : {
+        scale: displayWidth / sourceWidth,
+        offsetX: 0,
+        offsetY: 0,
+      };
+
+  const mapCoord = (value: number, axis: 'x' | 'y'): number => {
+    const offset = axis === 'x' ? offsetX : offsetY;
+    return offset + value * scale;
+  };
 
   return lines.map((line, index) => {
     const translation = translations.get(line.text.trim()) ?? '';
@@ -115,10 +242,10 @@ export function mapOverlayLabels(
       translation,
       confidence: line.confidence,
       bbox: {
-        x0: line.bbox.x0 * scaleX,
-        y0: line.bbox.y0 * scaleY,
-        x1: line.bbox.x1 * scaleX,
-        y1: line.bbox.y1 * scaleY,
+        x0: mapCoord(line.bbox.x0, 'x'),
+        y0: mapCoord(line.bbox.y0, 'y'),
+        x1: mapCoord(line.bbox.x1, 'x'),
+        y1: mapCoord(line.bbox.y1, 'y'),
       },
     };
   });

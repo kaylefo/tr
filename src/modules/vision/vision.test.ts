@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { tierSupportsMode, getVisionTier } from '../../config/vision';
-import { mergeAdjacentLines, containsJapanese, wrapOverlayText } from './imageProcessing';
+import {
+  assertValidImageDimensions,
+  mergeAdjacentLines,
+  containsJapanese,
+  wrapOverlayText,
+} from './imageProcessing';
 import type { OcrLineBox } from './ocrMessages';
 
 describe('vision tiers', () => {
@@ -12,6 +17,7 @@ describe('vision tiers', () => {
   it('live supports both modes', () => {
     expect(tierSupportsMode('live', 'photo')).toBe(true);
     expect(tierSupportsMode('live', 'live')).toBe(true);
+    expect(getVisionTier('live').components).toEqual(['translation-ja-en', 'ocr-jpn-vert']);
   });
 
   it('defines three tiers with components', () => {
@@ -26,7 +32,7 @@ describe('image processing', () => {
     expect(containsJapanese('hello')).toBe(false);
   });
 
-  it('merges adjacent lines', () => {
+  it('merges adjacent horizontal lines', () => {
     const lines: OcrLineBox[] = [
       {
         text: 'メニュー',
@@ -46,8 +52,32 @@ describe('image processing', () => {
     expect(merged[0].text).toContain('メニュー');
   });
 
+  it('merges adjacent vertical columns', () => {
+    const lines: OcrLineBox[] = [
+      {
+        text: '出',
+        confidence: 90,
+        bbox: { x0: 140, y0: 320, x1: 200, y1: 420 },
+        words: [],
+      },
+      {
+        text: '口',
+        confidence: 88,
+        bbox: { x0: 142, y0: 430, x1: 198, y1: 520 },
+        words: [],
+      },
+    ];
+    const merged = mergeAdjacentLines(lines);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].text).toBe('出口');
+  });
+
   it('wraps overlay text', () => {
     const lines = wrapOverlayText('This is a longer English translation line for display');
     expect(lines.length).toBeGreaterThan(1);
+  });
+
+  it('rejects zero-size dimensions', () => {
+    expect(() => assertValidImageDimensions(0, 0)).toThrow(/no pixels/i);
   });
 });

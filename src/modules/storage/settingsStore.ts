@@ -19,6 +19,8 @@ export const defaultSettings: AppSettings = {
   firstUseSeen: false,
 };
 
+let saveQueue: Promise<AppSettings> = Promise.resolve(defaultSettings);
+
 export async function loadSettings(): Promise<AppSettings> {
   const db = await getDb();
   const stored = await db.get('settings', 'app');
@@ -30,12 +32,17 @@ export async function loadSettings(): Promise<AppSettings> {
 }
 
 export async function saveSettings(partial: Partial<AppSettings>): Promise<AppSettings> {
-  const current = await loadSettings();
-  const next = { ...current, ...partial };
-  if (partial.firstUseSeen) {
-    localStorage.setItem('jp-first-use-seen', '1');
-  }
-  const db = await getDb();
-  await db.put('settings', next, 'app');
-  return next;
+  const save = async () => {
+    const current = await loadSettings();
+    const next = { ...current, ...partial };
+    if (partial.firstUseSeen) {
+      localStorage.setItem('jp-first-use-seen', '1');
+    }
+    const db = await getDb();
+    await db.put('settings', next, 'app');
+    return next;
+  };
+
+  saveQueue = saveQueue.then(save, save);
+  return saveQueue;
 }

@@ -11,6 +11,8 @@ export function extractTranslationText(
   return '';
 }
 
+import { normalizeProgressPercent } from '../languagePack/progress';
+
 export function progressPayload(progress: Record<string, unknown>): {
   status: string;
   file?: string;
@@ -18,10 +20,13 @@ export function progressPayload(progress: Record<string, unknown>): {
   loaded?: number;
   total?: number;
 } {
+  const rawProgress =
+    typeof progress.progress === 'number' ? progress.progress : undefined;
+
   return {
     status: typeof progress.status === 'string' ? progress.status : 'downloading',
     file: typeof progress.file === 'string' ? progress.file : undefined,
-    progress: typeof progress.progress === 'number' ? progress.progress : undefined,
+    progress: normalizeProgressPercent(rawProgress),
     loaded: typeof progress.loaded === 'number' ? progress.loaded : undefined,
     total: typeof progress.total === 'number' ? progress.total : undefined,
   };

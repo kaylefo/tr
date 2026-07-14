@@ -2,14 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { APP_DESCRIPTION, APP_NAME, APP_VERSION, BUILD_ID, FEE_PRESETS } from '../config/app';
 import { isStandaloneDisplay } from '../hooks/usePwaUpdate';
 import { useConnectivity } from '../hooks/useConnectivity';
-import { refreshExchangeRate } from '../modules/currency/rateService';
 import { clearAllLocalData } from '../modules/storage/db';
 import {
   clearConversionHistory,
   clearTranslationHistory,
 } from '../modules/storage/historyStore';
 import { getJaEnPack, type OfflinePackRecord } from '../modules/storage/packStore';
-import { translationService } from '../modules/translation/translationService';
+import { languagePackManager } from '../modules/languagePack/languagePackManager';
 import type { AppSettings } from '../modules/storage/settingsStore';
 import { OfflinePackPanel } from '../components/OfflinePackPanel';
 
@@ -18,7 +17,8 @@ interface SettingsPageProps {
   onUpdate: (partial: Partial<AppSettings>) => Promise<void>;
   onRefreshRate: () => Promise<void>;
   needRefresh: boolean;
-  onUpdateApp: () => void;
+  offlineReady: boolean;
+  onUpdateApp: () => Promise<void>;
 }
 
 async function estimateStorage(): Promise<string> {
@@ -38,6 +38,7 @@ export function SettingsPage({
   onUpdate,
   onRefreshRate,
   needRefresh,
+  offlineReady,
   onUpdateApp,
 }: SettingsPageProps) {
   const connection = useConnectivity();
@@ -45,6 +46,8 @@ export function SettingsPage({
   const [pack, setPack] = useState<OfflinePackRecord | null>(null);
   const [storageEstimate, setStorageEstimate] = useState('Loading…');
   const [persistent, setPersistent] = useState<boolean | null>(null);
+  const [packBusy, setPackBusy] = useState(languagePackManager.isBusy());
+  const [clearing, setClearing] = useState(false);
   const standalone = isStandaloneDisplay();
 
   const reload = useCallback(async () => {
@@ -58,6 +61,29 @@ export function SettingsPage({
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(
+    () => languagePackManager.subscribeActivity(setPackBusy),
+    [],
+  );
+
+  const clearEverything = async () => {
+    if (
+      !window.confirm(
+        'Clear all local application data? This removes history, settings, rates, and offline packs.',
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    try {
+      await languagePackManager.deleteTranslationPack();
+      await clearAllLocalData();
+      window.location.assign(import.meta.env.BASE_URL);
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <section className="page settings-page" aria-labelledby="settings-heading">
@@ -164,16 +190,10 @@ export function SettingsPage({
         <button
           type="button"
           className="button button--danger"
-          onClick={() => {
-            if (window.confirm('Clear all local application data? This removes history, settings, rates, and offline packs.')) {
-              void clearAllLocalData().then(() => {
-                void translationService.deletePack();
-                window.location.reload();
-              });
-            }
-          }}
+          onClick={() => void clearEverything()}
+          disabled={clearing || packBusy}
         >
-          Clear all local data
+          {clearing ? 'Clearing…' : 'Clear all local data'}
         </button>
       </section>
 
@@ -182,14 +202,20 @@ export function SettingsPage({
         <p className="settings-meta">Version {APP_VERSION}</p>
         <p className="settings-meta">Build {BUILD_ID}</p>
         <p className="settings-meta">{APP_DESCRIPTION}</p>
+        {offlineReady ? (
+          <p className="settings-meta">App shell is ready for offline use.</p>
+        ) : null}
         {needRefresh ? (
-          <button type="button" className="button" onClick={onUpdateApp}>
-            Update available — reload
+          <button
+            type="button"
+            className="button"
+            onClick={() => void onUpdateApp()}
+            disabled={packBusy}
+          >
+            {packBusy ? 'Update waits for pack download' : 'Install app update'}
           </button>
         ) : (
-          <button type="button" className="button button--secondary" onClick={() => void refreshExchangeRate({ force: true })}>
-            Check for app update
-          </button>
+          <p className="settings-meta">Application is up to date.</p>
         )}
         {standalone ? (
           <p className="settings-meta">Installed</p>

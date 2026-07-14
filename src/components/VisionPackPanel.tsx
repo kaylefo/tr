@@ -1,4 +1,5 @@
 import type { VisionPackRecord } from '../modules/storage/visionPackStore';
+import { isVisionPackOperational } from '../modules/storage/visionPackStore';
 import type { VisionTierId } from '../config/vision';
 import { VISION_TIERS } from '../config/vision';
 
@@ -28,6 +29,23 @@ function statusLabel(status: VisionPackRecord['status']): string {
   }
 }
 
+function componentStatusLabel(status: string, progress: number): string {
+  switch (status) {
+    case 'ready':
+      return 'Ready';
+    case 'downloading':
+      return progress > 0 ? `Downloading ${Math.round(progress)}%` : 'Downloading…';
+    case 'preparing':
+      return 'Preparing…';
+    case 'failed':
+      return 'Failed';
+    case 'pending':
+      return 'Waiting';
+    default:
+      return status;
+  }
+}
+
 export function VisionPackPanel({
   packs,
   activeTierId,
@@ -47,6 +65,11 @@ export function VisionPackPanel({
       {VISION_TIERS.map((tierDef) => {
         const pack = packs.find((p) => p.tierId === tierDef.tierId)!;
         const selected = activeTierId === tierDef.tierId;
+        const packReady = isVisionPackOperational(pack);
+        const activeComponent = pack.components.find(
+          (c) => c.status === 'downloading' || c.status === 'preparing',
+        );
+
         return (
           <article
             key={tierDef.tierId}
@@ -57,14 +80,19 @@ export function VisionPackPanel({
                 <h4>{tierDef.label}</h4>
                 <p>{tierDef.description}</p>
                 <p className="vision-pack-card__meta">
-                  ~{tierDef.estimatedSizeMb} MB · {statusLabel(pack.status)}
+                  ~{tierDef.estimatedSizeMb} MB · {statusLabel(packReady ? 'ready' : pack.status)}
                 </p>
+                {activeComponent ? (
+                  <p className="vision-pack-card__meta" role="status" aria-live="polite">
+                    Current step: {activeComponent.label} — {componentStatusLabel(activeComponent.status, activeComponent.progress)}
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
                 className={`chip${selected ? ' chip--active' : ''}`}
                 onClick={() => onSelectTier(tierDef.tierId)}
-                disabled={pack.status !== 'ready'}
+                disabled={!packReady}
               >
                 {selected ? 'Active' : 'Use'}
               </button>
@@ -75,10 +103,12 @@ export function VisionPackPanel({
                 <li key={component.id} className="vision-component">
                   <div className="vision-component__row">
                     <span>{component.label}</span>
-                    <span className="vision-component__status">{component.status}</span>
+                    <span className="vision-component__status">
+                      {componentStatusLabel(component.status, component.progress)}
+                    </span>
                   </div>
                   <div
-                    className="vision-component__bar"
+                    className={`vision-component__bar${component.status === 'downloading' || component.status === 'preparing' ? ' vision-component__bar--active' : ''}`}
                     role="progressbar"
                     aria-valuenow={Math.round(component.progress)}
                     aria-valuemin={0}
@@ -97,14 +127,14 @@ export function VisionPackPanel({
             {pack.errorMessage ? <p className="notice notice--warn">{pack.errorMessage}</p> : null}
 
             <div className="action-row">
-              {pack.status !== 'ready' ? (
+              {!packReady ? (
                 <button
                   type="button"
                   className="button"
                   disabled={!isOnline || busy}
                   onClick={() => onDownload(tierDef.tierId)}
                 >
-                  Download {tierDef.label} pack
+                  {busy && pack.status === 'downloading' ? 'Downloading…' : `Download ${tierDef.label} pack`}
                 </button>
               ) : (
                 <>

@@ -77,12 +77,26 @@ export type OcrOutbound =
 export function profileToLangs(profile: OcrLangProfile): string {
   switch (profile) {
     case 'jpn-vert':
-      return 'jpn+jpn_vert';
+      // Standard jpn model + vertical PSM is more reliable than jpn+jpn_vert on mobile.
+      return 'jpn';
     case 'jpn-best':
     case 'jpn-fast':
     default:
       return 'jpn';
   }
+}
+
+export function profileToLangPath(profile: OcrLangProfile): string {
+  const origin =
+    typeof self !== 'undefined' && 'location' in self && self.location?.origin
+      ? self.location.origin
+      : '';
+  const basePath = (
+    (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) ||
+    '/'
+  ).replace(/^\.\//, '/');
+  const root = `${origin}${basePath.endsWith('/') ? basePath : `${basePath}/`}`;
+  return profile === 'jpn-best' ? `${root}tesseract/best` : `${root}tesseract`;
 }
 
 export function profileToTessdata(profile: OcrLangProfile): 'fast' | 'best' {

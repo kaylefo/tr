@@ -27,7 +27,7 @@ export default function App() {
   const { settings, updateSettings, loading } = useSettings();
   const [tab, setTab] = useState<MainTab>('convert');
   const connection = useConnectivity();
-  const { needRefresh, updateApp } = usePwaUpdate();
+  const { needRefresh, offlineReady, updateApp } = usePwaUpdate();
   const { refresh } = useExchangeRate(settings?.autoRefreshRate ?? true);
 
   useEffect(() => {
@@ -84,6 +84,7 @@ export default function App() {
               onUpdate={updateSettings}
               onRefreshRate={() => refresh(true)}
               needRefresh={needRefresh}
+              offlineReady={offlineReady}
               onUpdateApp={updateApp}
             />
           </Suspense>

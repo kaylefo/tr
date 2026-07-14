@@ -20,18 +20,20 @@ export function subscribeConnectivity(
 
 export async function probeConnectivity(): Promise<ConnectionState> {
   if (!navigator.onLine) return 'offline';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    await fetch('/icons/icon-32.png', {
+    const response = await fetch(`${import.meta.env.BASE_URL}icons/icon-32.png`, {
       method: 'HEAD',
       cache: 'no-store',
       signal: controller.signal,
     });
-    clearTimeout(timer);
+    if (!response.ok) throw new Error(`Connectivity probe failed (${response.status})`);
     return 'online';
   } catch {
     return navigator.onLine ? 'uncertain' : 'offline';
+  } finally {
+    clearTimeout(timer);
   }
 }
 

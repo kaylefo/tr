@@ -3,7 +3,8 @@ import { TRANSLATION_DEBOUNCE_MS, TRANSLATION_MAX_CHARS } from '../config/app';
 import { useConnectivity } from '../hooks/useConnectivity';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { getJaEnPack, type OfflinePackRecord } from '../modules/storage/packStore';
-import { translationService } from '../modules/translation/translationService';
+import { languagePackManager } from '../modules/languagePack/languagePackManager';
+import { TranslationError, translationService } from '../modules/translation/translationService';
 import { normalizeTranslationError } from '../modules/translation/messages';
 
 const OfflinePackPanel = lazy(() =>
@@ -28,14 +29,15 @@ export function TranslatePage() {
 
   useEffect(() => {
     void loadPack();
-    translationService.setListeners({
-      onProgress: () => void loadPack(),
-      onReady: () => {
+    void translationService.warmUp();
+    const unsubs = [
+      languagePackManager.subscribeTranslationReady(() => {
         void loadPack();
         setAnnouncement('Offline translation ready');
-      },
-      onError: (msg) => setError(msg),
-    });
+      }),
+      languagePackManager.subscribeTranslationError((message) => setError(message)),
+    ];
+    return () => unsubs.forEach((u) => u());
   }, [loadPack]);
 
   const runTranslation = useCallback(
@@ -65,6 +67,9 @@ export function TranslatePage() {
           });
         }
       } catch (err) {
+        if (err instanceof TranslationError && err.code === 'CANCELLED') {
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Translation failed');
       } finally {
         setTranslating(false);
