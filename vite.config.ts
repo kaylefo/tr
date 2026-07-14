@@ -12,6 +12,7 @@ function resolveBuildId(): string {
 }
 
 export default defineConfig({
+  base: process.env.GITHUB_PAGES === 'true' ? '/tr/' : './',
   define: {
     __BUILD_ID__: JSON.stringify(resolveBuildId()),
   },
@@ -25,7 +26,7 @@ export default defineConfig({
       workbox: {
         maximumFileSizeToCacheInBytes: 25 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
-        navigateFallback: '/index.html',
+        navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
@@ -88,5 +89,9 @@ export default defineConfig({
         },
       },
     },
+  },
+  preview: {
+    host: '0.0.0.0',
+    allowedHosts: true,
   },
 });
