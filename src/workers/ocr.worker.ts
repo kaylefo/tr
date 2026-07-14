@@ -1,5 +1,4 @@
 import { createWorker } from 'tesseract.js';
-import { VISION_OCR_TEST_TEXT } from '../config/vision';
 import {
   OCR_MESSAGE,
   profileToLangs,
@@ -14,6 +13,10 @@ type TesseractWorker = Awaited<ReturnType<typeof createWorker>>;
 
 let worker: TesseractWorker | null = null;
 let activeProfile: string | null = null;
+let messageChain: Promise<void> = Promise.resolve();
+
+const TESSDATA_FAST = 'https://tessdata.projectnaptha.com/4.0.0';
+const TESSDATA_BEST = 'https://tessdata.projectnaptha.com/4.0.0_best';
 
 function post(message: OcrOutbound): void {
   self.postMessage(message);
@@ -24,10 +27,7 @@ function postProgress(payload: OcrProgressPayload): void {
 }
 
 function langPathFor(profile: ReturnType<typeof profileToTessdata>): string {
-  if (profile === 'best') {
-    return 'https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_best@main';
-  }
-  return 'https://tessdata.projectnaptha.com/4.0.0';
+  return profile === 'best' ? TESSDATA_BEST : TESSDATA_FAST;
 }
 
 function mapLines(data: {
@@ -73,38 +73,29 @@ async function createOcrWorker(message: Extract<OcrInbound, { type: typeof OCR_M
   if (worker) {
     await worker.terminate();
     worker = null;
+    activeProfile = null;
   }
 
   const tessdata = profileToTessdata(langProfile);
+  postProgress({ status: 'initializing', progress: 0 });
 
   worker = await createWorker(langs, 1, {
     logger: (msg) => {
+      const progress =
+        typeof msg.progress === 'number'
+          ? Math.max(0, Math.min(100, msg.progress * 100))
+          : undefined;
       postProgress({
         status: msg.status ?? 'downloading',
-        progress: typeof msg.progress === 'number' ? msg.progress * 100 : undefined,
+        progress,
         userJobId: msg.userJobId,
       });
     },
     langPath: langPathFor(tessdata),
-    gzip: true,
+    gzip: false,
   });
 
   activeProfile = langProfile;
-
-  const testCanvas = new OffscreenCanvas(320, 96);
-  const ctx = testCanvas.getContext('2d');
-  if (!ctx) throw new Error('Validation canvas unavailable');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, testCanvas.width, testCanvas.height);
-  ctx.fillStyle = '#111111';
-  ctx.font = 'bold 36px sans-serif';
-  ctx.fillText(VISION_OCR_TEST_TEXT, 16, 60);
-
-  const validation = await worker.recognize(testCanvas);
-  const text = validation.data.text?.replace(/\s/g, '') ?? '';
-  if (!text.includes('こんに') && !text.includes('にちは')) {
-    throw new Error('OCR validation did not detect Japanese test text');
-  }
 
   post({
     type: OCR_MESSAGE.READY,
@@ -141,49 +132,55 @@ async function recognize(message: Extract<OcrInbound, { type: typeof OCR_MESSAGE
   });
 }
 
-self.addEventListener('message', async (event: MessageEvent<OcrInbound>) => {
+function enqueue(task: () => Promise<void>): void {
+  messageChain = messageChain.then(task, task);
+}
+
+self.addEventListener('message', (event: MessageEvent<OcrInbound>) => {
   const message = event.data;
-  try {
-    switch (message.type) {
-      case OCR_MESSAGE.INIT:
-        await createOcrWorker(message);
-        break;
-      case OCR_MESSAGE.RECOGNIZE:
-        await recognize(message);
-        break;
-      case OCR_MESSAGE.HEALTH:
-        if (worker && activeProfile) {
-          post({
-            type: OCR_MESSAGE.READY,
-            payload: {
-              langs: profileToLangs(activeProfile as 'jpn-fast'),
-              langProfile: activeProfile as 'jpn-fast',
-              validatedAt: Date.now(),
-            },
-          });
-        } else {
-          post({ type: OCR_MESSAGE.ERROR, payload: { code: 'OCR_NOT_READY', message: 'OCR not ready' } });
-        }
-        break;
-      case OCR_MESSAGE.DISPOSE:
-        if (worker) {
-          await worker.terminate();
-          worker = null;
-          activeProfile = null;
-        }
-        break;
-      default:
-        break;
+  enqueue(async () => {
+    try {
+      switch (message.type) {
+        case OCR_MESSAGE.INIT:
+          await createOcrWorker(message);
+          break;
+        case OCR_MESSAGE.RECOGNIZE:
+          await recognize(message);
+          break;
+        case OCR_MESSAGE.HEALTH:
+          if (worker && activeProfile) {
+            post({
+              type: OCR_MESSAGE.READY,
+              payload: {
+                langs: profileToLangs(activeProfile as 'jpn-fast'),
+                langProfile: activeProfile as 'jpn-fast',
+                validatedAt: Date.now(),
+              },
+            });
+          } else {
+            post({ type: OCR_MESSAGE.ERROR, payload: { code: 'OCR_NOT_READY', message: 'OCR not ready' } });
+          }
+          break;
+        case OCR_MESSAGE.DISPOSE:
+          if (worker) {
+            await worker.terminate();
+            worker = null;
+            activeProfile = null;
+          }
+          break;
+        default:
+          break;
+      }
+    } catch (err) {
+      post({
+        type: OCR_MESSAGE.ERROR,
+        payload: {
+          code: 'OCR_INIT_FAILED',
+          message: err instanceof Error ? err.message : 'OCR worker error',
+        },
+      });
     }
-  } catch (err) {
-    post({
-      type: OCR_MESSAGE.ERROR,
-      payload: {
-        code: 'OCR_INIT_FAILED',
-        message: err instanceof Error ? err.message : 'OCR worker error',
-      },
-    });
-  }
+  });
 });
 
 export {};

@@ -9,7 +9,7 @@ import {
   clearTranslationHistory,
 } from '../modules/storage/historyStore';
 import { getJaEnPack, type OfflinePackRecord } from '../modules/storage/packStore';
-import { translationService } from '../modules/translation/translationService';
+import { languagePackManager } from '../modules/languagePack/languagePackManager';
 import type { AppSettings } from '../modules/storage/settingsStore';
 import { OfflinePackPanel } from '../components/OfflinePackPanel';
 
@@ -167,7 +167,7 @@ export function SettingsPage({
           onClick={() => {
             if (window.confirm('Clear all local application data? This removes history, settings, rates, and offline packs.')) {
               void clearAllLocalData().then(() => {
-                void translationService.deletePack();
+                void languagePackManager.deleteTranslationPack();
                 window.location.reload();
               });
             }
