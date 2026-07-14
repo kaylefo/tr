@@ -8,8 +8,9 @@ describe('profileToLangs', () => {
     expect(profileToLangs('jpn-vert')).not.toContain('+');
   });
 
-  it('uses fast tessdata path for live OCR', () => {
-    expect(profileToLangPath('jpn-vert')).toContain('4.0.0_fast');
+  it('uses same-origin tessdata path for live OCR', () => {
+    expect(profileToLangPath('jpn-vert')).toContain('tesseract');
+    expect(profileToLangPath('jpn-fast')).toContain('tesseract');
   });
 
   it('uses best tessdata path for photo OCR', () => {

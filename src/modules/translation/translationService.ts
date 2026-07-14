@@ -343,6 +343,10 @@ export class TranslationService {
   }
 
   async ensureReady(isOnline = true): Promise<void> {
+    if (typeof window !== 'undefined' && window.__JP_E2E__?.mockTranslate) {
+      return;
+    }
+
     const pack = await getJaEnPack();
     if (pack.status !== 'ready') {
       throw new TranslationError(isOnline ? 'MODEL_NOT_DOWNLOADED' : 'OFFLINE_NO_PACK');
@@ -353,6 +357,11 @@ export class TranslationService {
 
   async translate(text: string, isOnline: boolean): Promise<string> {
     if (!text.trim()) return '';
+
+    if (typeof window !== 'undefined' && window.__JP_E2E__?.mockTranslate) {
+      const mapped = window.__JP_E2E__.translations?.[text];
+      return mapped ?? `[en] ${text}`;
+    }
 
     const cached = this.resultCache.get(text);
     if (cached !== undefined) {

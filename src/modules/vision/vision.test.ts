@@ -32,7 +32,7 @@ describe('image processing', () => {
     expect(containsJapanese('hello')).toBe(false);
   });
 
-  it('merges adjacent lines', () => {
+  it('merges adjacent horizontal lines', () => {
     const lines: OcrLineBox[] = [
       {
         text: 'メニュー',
@@ -50,6 +50,26 @@ describe('image processing', () => {
     const merged = mergeAdjacentLines(lines);
     expect(merged).toHaveLength(1);
     expect(merged[0].text).toContain('メニュー');
+  });
+
+  it('merges adjacent vertical columns', () => {
+    const lines: OcrLineBox[] = [
+      {
+        text: '出',
+        confidence: 90,
+        bbox: { x0: 140, y0: 320, x1: 200, y1: 420 },
+        words: [],
+      },
+      {
+        text: '口',
+        confidence: 88,
+        bbox: { x0: 142, y0: 430, x1: 198, y1: 520 },
+        words: [],
+      },
+    ];
+    const merged = mergeAdjacentLines(lines);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].text).toBe('出口');
   });
 
   it('wraps overlay text', () => {

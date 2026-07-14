@@ -46,7 +46,13 @@ export function SeePage() {
     const all = await listVisionPacks();
     setPacks(all);
     const active = await getActiveVisionPackForMode(mode);
-    setActiveTierId(active?.tierId ?? null);
+    setActiveTierId((prev) => {
+      if (active?.tierId) return active.tierId;
+      if (prev && all.some((p) => p.tierId === prev && isVisionPackOperational(p))) {
+        return prev;
+      }
+      return active?.tierId ?? null;
+    });
   }, [mode]);
 
   useEffect(() => {

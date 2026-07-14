@@ -121,19 +121,26 @@ export function filterOcrLines(lines: OcrLineBox[], minConfidence = VISION_OCR_M
   return lines.filter((line) => {
     const text = line.text.trim();
     if (!text || !containsJapanese(text)) return false;
-    if (line.confidence < minConfidence) return false;
+    if (line.confidence > 0 && line.confidence < minConfidence) return false;
     return true;
   });
 }
 
-export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
+function lineOrientation(line: OcrLineBox): 'horizontal' | 'vertical' {
+  const w = Math.max(1, line.bbox.x1 - line.bbox.x0);
+  const h = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  if (h > w * 1.35 && line.text.length <= 6) return 'vertical';
+  return 'horizontal';
+}
+
+function mergeHorizontalLines(lines: OcrLineBox[]): OcrLineBox[] {
   if (lines.length <= 1) return lines;
   const sorted = [...lines].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
   const merged: OcrLineBox[] = [];
   for (const line of sorted) {
     const last = merged.at(-1);
     if (!last) {
-      merged.push(line);
+      merged.push({ ...line });
       continue;
     }
     const verticalGap = line.bbox.y0 - last.bbox.y1;
@@ -148,10 +155,53 @@ export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
       };
       last.words = [...last.words, ...line.words];
     } else {
-      merged.push(line);
+      merged.push({ ...line });
     }
   }
   return merged;
+}
+
+function mergeVerticalLines(lines: OcrLineBox[]): OcrLineBox[] {
+  if (lines.length <= 1) return lines;
+  const sorted = [...lines].sort((a, b) => a.bbox.x0 - b.bbox.x0 || a.bbox.y0 - b.bbox.y0);
+  const merged: OcrLineBox[] = [];
+  for (const line of sorted) {
+    const last = merged.at(-1);
+    if (!last) {
+      merged.push({ ...line });
+      continue;
+    }
+    const horizontalGap = line.bbox.x0 - last.bbox.x1;
+    const verticalGap = line.bbox.y0 - last.bbox.y1;
+    if (horizontalGap < 24 && verticalGap < 36) {
+      last.text = `${last.text}${line.text}`.trim();
+      last.confidence = (last.confidence + line.confidence) / 2;
+      last.bbox = {
+        x0: Math.min(last.bbox.x0, line.bbox.x0),
+        y0: Math.min(last.bbox.y0, line.bbox.y0),
+        x1: Math.max(last.bbox.x1, line.bbox.x1),
+        y1: Math.max(last.bbox.y1, line.bbox.y1),
+      };
+      last.words = [...last.words, ...line.words];
+    } else {
+      merged.push({ ...line });
+    }
+  }
+  return merged;
+}
+
+export function mergeAdjacentLines(lines: OcrLineBox[]): OcrLineBox[] {
+  if (lines.length <= 1) return lines;
+  const horizontal: OcrLineBox[] = [];
+  const vertical: OcrLineBox[] = [];
+  for (const line of lines) {
+    if (lineOrientation(line) === 'vertical') {
+      vertical.push(line);
+    } else {
+      horizontal.push(line);
+    }
+  }
+  return [...mergeHorizontalLines(horizontal), ...mergeVerticalLines(vertical)];
 }
 
 export interface OverlayLabel {

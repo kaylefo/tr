@@ -4,6 +4,12 @@ export const TRANSLATION_DOWNLOAD_TIMEOUT_MS = 20 * 60 * 1000;
 /** Maximum time to wait for an OCR language data download. */
 export const OCR_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** Maximum time to wait for a single OCR worker create/init attempt during download. */
+export const OCR_WORKER_INIT_TIMEOUT_MS = 45_000;
+
+/** Maximum time to wait when initializing OCR for recognition after data is cached. */
+export const OCR_WORKER_RUNTIME_INIT_TIMEOUT_MS = 45_000;
+
 /** Retry attempts for transient download / init failures. */
 export const PACK_DOWNLOAD_MAX_ATTEMPTS = 3;
 

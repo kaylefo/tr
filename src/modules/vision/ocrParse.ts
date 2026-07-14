@@ -103,19 +103,26 @@ export function parseTesseractPage(
 
   const fullText = page.text?.trim();
   if (fullText && containsJapanese(fullText)) {
-    return [
-      {
-        text: fullText,
-        confidence: page.confidence ?? 65,
-        bbox: {
-          x0: Math.round(imageWidth * 0.05),
-          y0: Math.round(imageHeight * 0.08),
-          x1: Math.round(imageWidth * 0.95),
-          y1: Math.round(imageHeight * 0.28),
-        },
-        words: [],
+    const parts = fullText
+      .split(/\n+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length === 0) {
+      parts.push(fullText);
+    }
+
+    const lineHeight = Math.round(imageHeight / Math.max(parts.length + 2, 4));
+    return parts.map((text, index) => ({
+      text,
+      confidence: page.confidence ?? 65,
+      bbox: {
+        x0: Math.round(imageWidth * 0.05),
+        y0: Math.round(imageHeight * 0.08 + index * lineHeight),
+        x1: Math.round(imageWidth * 0.95),
+        y1: Math.round(imageHeight * 0.08 + (index + 1) * lineHeight),
       },
-    ];
+      words: [],
+    }));
   }
 
   return [];

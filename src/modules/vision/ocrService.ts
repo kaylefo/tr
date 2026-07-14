@@ -1,6 +1,8 @@
 import { createWorker, PSM } from 'tesseract.js';
 import {
   OCR_DOWNLOAD_TIMEOUT_MS,
+  OCR_WORKER_INIT_TIMEOUT_MS,
+  OCR_WORKER_RUNTIME_INIT_TIMEOUT_MS,
   PACK_DOWNLOAD_MAX_ATTEMPTS,
   PACK_DOWNLOAD_RETRY_DELAY_MS,
   VISION_OCR_RECOGNIZE_TIMEOUT_MS,
@@ -18,8 +20,6 @@ import { parseTesseractPage } from './ocrParse';
 import { toError, toErrorMessage } from './visionErrors';
 
 type TesseractWorker = Awaited<ReturnType<typeof createWorker>>;
-
-const TESSERACT_VERSION = '6.0.1';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,11 +42,20 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 function tesseractCdnOptions(cacheMethod?: 'read' | 'write' | 'refresh' | 'none') {
+  // Always use absolute same-origin URLs. Relative/BASE_URL paths break inside
+  // the Tesseract worker and silently fall back to third-party CDNs.
+  const origin =
+    typeof self !== 'undefined' && 'location' in self && self.location?.origin
+      ? self.location.origin
+      : '';
+  const basePath = (import.meta.env.BASE_URL ?? '/').replace(/^\.\//, '/');
+  const root = `${origin}${basePath.endsWith('/') ? basePath : `${basePath}/`}`;
   return {
-    workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@v${TESSERACT_VERSION}/dist/worker.min.js`,
-    corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.1.0',
+    workerPath: `${root}tesseract/worker.min.js`,
+    corePath: `${root}tesseract`,
+    langPath: `${root}tesseract`,
     gzip: false as const,
-    workerBlobURL: true as const,
+    workerBlobURL: false as const,
     cacheMethod,
   };
 }
@@ -79,13 +88,17 @@ function normalizePsm(psm: number): PSM {
   return Object.values(PSM).includes(value) ? value : PSM.AUTO;
 }
 
-function profileFallbackLangs(_profile: OcrLangProfile): string[] {
+function profileFallbackLangs(profile: OcrLangProfile): string[] {
+  if (profile === 'jpn-vert') {
+    return ['jpn_vert', 'jpn'];
+  }
   return ['jpn'];
 }
 
-function profilePsm(profile: OcrLangProfile, requestedPsm: number): PSM {
+function profilePsm(profile: OcrLangProfile, requestedPsm: number, mode: 'photo' | 'live' = 'photo'): PSM {
   if (profile === 'jpn-vert') {
-    return normalizePsm(5);
+    // Live camera: vertical page mode. Photo uploads: auto-segment mixed layouts.
+    return mode === 'live' ? normalizePsm(5) : normalizePsm(requestedPsm || 3);
   }
   return normalizePsm(requestedPsm);
 }
@@ -110,6 +123,8 @@ class OcrService {
   private activeProfile: OcrLangProfile | null = null;
   private initPromise: Promise<void> | null = null;
   private pendingProfile: OcrLangProfile | null = null;
+  /** Profiles whose traineddata is cached locally even if worker init was deferred. */
+  private readonly cachedProfiles = new Set<OcrLangProfile>();
 
   async downloadComponent(
     componentId: PackComponentId,
@@ -135,13 +150,17 @@ class OcrService {
         });
 
         await withTimeout(
-          this.loadProfileInternal(profile, onProgress),
+          this.loadProfileInternal(profile, onProgress, {
+            cacheMethod: attempt === 1 ? 'write' : 'refresh',
+            allowDeferredInit: true,
+          }),
           OCR_DOWNLOAD_TIMEOUT_MS,
           `${label} download timed out after ${Math.round(OCR_DOWNLOAD_TIMEOUT_MS / 60000)} minutes. Check Wi‑Fi and tap Retry.`,
         );
 
         stopHeartbeat();
         onProgress({ status: `${label} ready`, progress: 100 });
+        await this.dispose();
         return;
       } catch (err) {
         stopHeartbeat();
@@ -153,16 +172,30 @@ class OcrService {
       }
     }
 
+    if (this.cachedProfiles.has(profile)) {
+      onProgress({ status: `${label} ready (cached)`, progress: 100 });
+      await this.dispose();
+      return;
+    }
+
     throw lastError ?? new Error('OCR download failed');
   }
 
   async ensureProfile(profile: OcrLangProfile): Promise<void> {
-    await this.loadProfileInternal(profile, () => undefined);
+    await this.loadProfileInternal(profile, () => undefined, {
+      cacheMethod: 'read',
+      initTimeoutMs: OCR_WORKER_RUNTIME_INIT_TIMEOUT_MS,
+    });
   }
 
   private async loadProfileInternal(
     profile: OcrLangProfile,
     onProgress: (payload: OcrProgressPayload) => void,
+    options: {
+      cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
+      allowDeferredInit?: boolean;
+      initTimeoutMs?: number;
+    } = {},
   ): Promise<void> {
     if (this.worker && this.activeProfile === profile) {
       onProgress({ status: 'OCR ready', progress: 100 });
@@ -172,9 +205,10 @@ class OcrService {
     if (this.initPromise) {
       await this.initPromise;
       if (this.activeProfile === profile) return;
+      if (options.allowDeferredInit && this.cachedProfiles.has(profile)) return;
     }
 
-    this.initPromise = this.loadProfile(profile, onProgress).finally(() => {
+    this.initPromise = this.loadProfile(profile, onProgress, options).finally(() => {
       this.initPromise = null;
     });
 
@@ -184,7 +218,11 @@ class OcrService {
   private async loadProfile(
     profile: OcrLangProfile,
     onProgress: (payload: OcrProgressPayload) => void,
-    options: { cacheMethod?: 'read' | 'write' | 'refresh' | 'none' } = {},
+    options: {
+      cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
+      allowDeferredInit?: boolean;
+      initTimeoutMs?: number;
+    } = {},
   ): Promise<void> {
     if (this.worker) {
       await this.worker.terminate();
@@ -198,12 +236,17 @@ class OcrService {
 
     for (const langs of candidates) {
       try {
-        await this.createWorker(langs, profile, onProgress, options.cacheMethod);
+        await this.createWorker(langs, profile, onProgress, options);
         return;
       } catch (err) {
         lastError = err;
         await this.dispose();
       }
+    }
+
+    if (options.allowDeferredInit && this.cachedProfiles.has(profile)) {
+      onProgress({ status: 'OCR ready (cached)', progress: 100 });
+      return;
     }
 
     throw toError(lastError, 'OCR initialization failed');
@@ -213,39 +256,84 @@ class OcrService {
     langs: string,
     profile: OcrLangProfile,
     onProgress: (payload: OcrProgressPayload) => void,
-    cacheMethod?: 'read' | 'write' | 'refresh' | 'none',
+    options: {
+      cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
+      allowDeferredInit?: boolean;
+      initTimeoutMs?: number;
+    } = {},
   ): Promise<void> {
+    const initTimeoutMs = options.initTimeoutMs ?? OCR_WORKER_INIT_TIMEOUT_MS;
     let lastReported = 0;
+    let languageDataLoaded = false;
 
     onProgress({ status: formatOcrStatus('loading tesseract core', langs), progress: 5 });
 
-    const worker = await createWorker(langs, 1, {
-      ...tesseractCdnOptions(cacheMethod),
-      langPath: profileToLangPath(profile),
-      logger: (msg) => {
-        const progress =
-          typeof msg.progress === 'number'
-            ? Math.max(0, Math.min(100, Math.round(msg.progress * 100)))
-            : undefined;
-        const nextProgress = progress ?? lastReported;
-        if (progress != null) lastReported = progress;
+    try {
+      const worker = await withTimeout(
+        createWorker(langs, 1, {
+          ...tesseractCdnOptions(options.cacheMethod),
+          langPath: profileToLangPath(profile),
+          logger: (msg) => {
+            const progress =
+              typeof msg.progress === 'number'
+                ? Math.max(0, Math.min(100, Math.round(msg.progress * 100)))
+                : undefined;
+            const nextProgress = progress ?? lastReported;
+            if (progress != null) lastReported = progress;
 
-        onProgress({
-          status: formatOcrStatus(msg.status ?? 'downloading', langs),
-          progress: nextProgress > 0 ? nextProgress : undefined,
-        });
-      },
-      errorHandler: (err) => {
-        console.error('[OCR]', err);
-      },
-    });
+            const status = msg.status ?? 'downloading';
+            if (nextProgress >= 85) {
+              languageDataLoaded = true;
+            }
+            if (
+              (status === 'loading language traineddata' && nextProgress >= 99) ||
+              status === 'initialized api' ||
+              status === 'initializing api'
+            ) {
+              languageDataLoaded = true;
+            }
 
-    this.worker = worker;
-    this.activeProfile = profile;
-    onProgress({ status: 'OCR ready', progress: 100 });
+            onProgress({
+              status: formatOcrStatus(status, langs),
+              progress: nextProgress > 0 ? nextProgress : undefined,
+            });
+          },
+          errorHandler: (err) => {
+            console.error('[OCR]', err);
+          },
+        }),
+        initTimeoutMs,
+        'OCR worker initialization timed out',
+      );
+
+      this.worker = worker;
+      this.activeProfile = profile;
+      this.cachedProfiles.add(profile);
+      onProgress({ status: 'OCR ready', progress: 100 });
+    } catch (err) {
+      if (options.allowDeferredInit && languageDataLoaded) {
+        this.cachedProfiles.add(profile);
+        this.pendingProfile = profile;
+        onProgress({ status: 'OCR ready (cached)', progress: 100 });
+        return;
+      }
+      throw err;
+    }
   }
 
-  async recognize(imageData: ImageData, psm: number): Promise<OcrResultPayload> {
+  async recognize(
+    imageData: ImageData,
+    psm: number,
+    mode: 'photo' | 'live' = 'photo',
+  ): Promise<OcrResultPayload> {
+    const activeProfile = this.activeProfile ?? this.pendingProfile;
+    if (!this.worker || !this.activeProfile) {
+      if (!activeProfile) {
+        throw new Error('OCR not initialized');
+      }
+      await this.ensureProfile(activeProfile);
+    }
+
     if (!this.worker || !this.activeProfile) {
       throw new Error('OCR not initialized');
     }
@@ -261,8 +349,7 @@ class OcrService {
     if (!ctx) throw new Error('Canvas unavailable');
     ctx.putImageData(imageData, 0, 0);
 
-    const profile = this.activeProfile;
-    const psmValue = profilePsm(profile, psm);
+    const psmValue = profilePsm(this.activeProfile, psm, mode);
 
     try {
       return await this.recognizeCanvas(canvas, psmValue, { blocks: true, text: true });
@@ -275,17 +362,21 @@ class OcrService {
         console.warn('[OCR] Text-only recognition failed, reloading OCR:', toErrorMessage(secondErr));
       }
 
-      const reloadProfile = this.pendingProfile ?? profile;
+      const reloadProfile = this.activeProfile ?? this.pendingProfile;
+      if (!reloadProfile) {
+        throw toError(firstErr, 'OCR failed');
+      }
       await this.loadProfile(reloadProfile, () => undefined, { cacheMethod: 'refresh' });
 
+      const reloadPsm = profilePsm(reloadProfile, psm, mode);
       try {
-        return await this.recognizeCanvas(canvas, profilePsm(reloadProfile, psm), {
+        return await this.recognizeCanvas(canvas, reloadPsm, {
           blocks: true,
           text: true,
         });
       } catch (thirdErr) {
         try {
-          return await this.recognizeCanvas(canvas, profilePsm(reloadProfile, psm), {
+          return await this.recognizeCanvas(canvas, reloadPsm, {
             blocks: false,
             text: true,
           });
@@ -330,7 +421,6 @@ class OcrService {
       this.worker = null;
     }
     this.activeProfile = null;
-    this.pendingProfile = null;
     this.initPromise = null;
   }
 

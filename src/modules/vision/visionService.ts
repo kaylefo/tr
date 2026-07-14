@@ -94,7 +94,7 @@ export class VisionService {
     _mode: VisionMode = 'photo',
   ): Promise<OcrLineBox[]> {
     await this.initOcrForTier(tierId);
-    const result = await ocrService.recognize(imageData, psm);
+    const result = await ocrService.recognize(imageData, psm, _mode);
     return result.lines;
   }
 

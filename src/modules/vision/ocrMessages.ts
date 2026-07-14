@@ -90,7 +90,16 @@ export function profileToLangPath(profile: OcrLangProfile): string {
   if (profile === 'jpn-best') {
     return 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/jpn/4.0.0_best_int';
   }
-  return 'https://tessdata.projectnaptha.com/4.0.0_fast';
+  const origin =
+    typeof self !== 'undefined' && 'location' in self && self.location?.origin
+      ? self.location.origin
+      : '';
+  const basePath = (
+    (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) ||
+    '/'
+  ).replace(/^\.\//, '/');
+  const root = `${origin}${basePath.endsWith('/') ? basePath : `${basePath}/`}`;
+  return `${root}tesseract`;
 }
 
 export function profileToTessdata(profile: OcrLangProfile): 'fast' | 'best' {

@@ -14,7 +14,9 @@
     "test:e2e": "playwright test",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "generate-icons": "node scripts/generate-icons.mjs",
-    "postinstall": "node scripts/generate-icons.mjs"
+    "generate-ocr-fixture": "node scripts/generate-ocr-fixture.mjs",
+    "ensure-ocr-assets": "node scripts/ensure-ocr-assets.mjs",
+    "postinstall": "node scripts/generate-icons.mjs && node scripts/ensure-ocr-assets.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.4.2",
