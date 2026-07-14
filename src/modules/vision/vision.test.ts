@@ -12,6 +12,7 @@ describe('vision tiers', () => {
   it('live supports both modes', () => {
     expect(tierSupportsMode('live', 'photo')).toBe(true);
     expect(tierSupportsMode('live', 'live')).toBe(true);
+    expect(getVisionTier('live').components).toEqual(['translation-ja-en', 'ocr-jpn-vert']);
   });
 
   it('defines three tiers with components', () => {
