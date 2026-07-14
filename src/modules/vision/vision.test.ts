@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { tierSupportsMode, getVisionTier } from '../../config/vision';
-import { mergeAdjacentLines, containsJapanese, wrapOverlayText } from './imageProcessing';
+import {
+  assertValidImageDimensions,
+  mergeAdjacentLines,
+  containsJapanese,
+  wrapOverlayText,
+} from './imageProcessing';
 import type { OcrLineBox } from './ocrMessages';
 
 describe('vision tiers', () => {
@@ -12,6 +17,7 @@ describe('vision tiers', () => {
   it('live supports both modes', () => {
     expect(tierSupportsMode('live', 'photo')).toBe(true);
     expect(tierSupportsMode('live', 'live')).toBe(true);
+    expect(getVisionTier('live').components).toEqual(['translation-ja-en', 'ocr-jpn-vert']);
   });
 
   it('defines three tiers with components', () => {
@@ -49,5 +55,9 @@ describe('image processing', () => {
   it('wraps overlay text', () => {
     const lines = wrapOverlayText('This is a longer English translation line for display');
     expect(lines.length).toBeGreaterThan(1);
+  });
+
+  it('rejects zero-size dimensions', () => {
+    expect(() => assertValidImageDimensions(0, 0)).toThrow(/no pixels/i);
   });
 });

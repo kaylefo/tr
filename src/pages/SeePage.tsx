@@ -4,14 +4,15 @@ import { getVisionTier, tierSupportsMode, VISION_LIVE_MIN_INTERVAL_MS } from '..
 import { useConnectivity } from '../hooks/useConnectivity';
 import { CameraViewport, TranslationOverlay } from '../components/TranslationOverlay';
 import {
-  captureVideoFrame,
-  preprocessCanvas,
+  waitForVideoFrame,
   type OverlayLabel,
 } from '../modules/vision/imageProcessing';
-import { getActiveVisionPack, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
+import { isVisionPipelineError } from '../modules/vision/visionPipeline';
+import { getActiveVisionPackForMode, isVisionPackOperational, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
 import { visionService } from '../modules/vision/visionService';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { TRANSLATION_MODEL_JA_EN } from '../config/app';
+import { VISION_VIDEO_FRAME_TIMEOUT_MS } from '../config/languagePack';
 
 const VisionPackPanel = lazy(() =>
   import('../components/VisionPackPanel').then((m) => ({ default: m.VisionPackPanel })),
@@ -36,19 +37,20 @@ export function SeePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const liveTimerRef = useRef<number | null>(null);
   const scanInFlightRef = useRef(false);
+  const scanGenerationRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
   const reloadPacks = useCallback(async () => {
     const all = await listVisionPacks();
     setPacks(all);
-    const active = await getActiveVisionPack();
+    const active = await getActiveVisionPackForMode(mode);
     setActiveTierId(active?.tierId ?? null);
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     void reloadPacks();
-  }, [reloadPacks]);
+  }, [reloadPacks, mode]);
 
   const stopCamera = useCallback(() => {
     if (liveTimerRef.current) {
@@ -79,6 +81,26 @@ export function SeePage() {
       if (!video) throw new Error('Camera preview unavailable');
       video.srcObject = stream;
       await video.play();
+      await new Promise<void>((resolve, reject) => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve();
+          return;
+        }
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('Camera preview failed to start'));
+        };
+        const cleanup = () => {
+          video.removeEventListener('loadeddata', onReady);
+          video.removeEventListener('error', onError);
+        };
+        video.addEventListener('loadeddata', onReady, { once: true });
+        video.addEventListener('error', onError, { once: true });
+      });
       setCameraOn(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Camera access failed');
@@ -98,27 +120,33 @@ export function SeePage() {
         return;
       }
 
+      const scanId = ++scanGenerationRef.current;
       setScanning(true);
       setError(null);
 
       try {
-        await visionService.ensureTierReady(activeTierId, isOnline);
-        const imageData = preprocessCanvas(canvas);
         const viewport = viewportRef.current;
         const displayWidth = viewport?.clientWidth ?? canvas.width;
         const displayHeight = viewport?.clientHeight ?? canvas.height;
 
-        const overlays = await visionService.processImageToOverlays(
-          imageData,
+        const overlays = await visionService.processFrameToOverlays(
+          canvas,
           activeTierId,
           tier.ocrPsm,
+          mode,
           displayWidth,
           displayHeight,
           isOnline,
         );
 
+        if (scanId !== scanGenerationRef.current) return;
+
         setLabels(overlays);
-        setAnnouncement(`${overlays.length} translation overlays updated`);
+        setAnnouncement(
+          overlays.length > 0
+            ? `${overlays.length} translation overlays updated`
+            : 'No Japanese text detected in frame',
+        );
 
         const combinedSource = overlays.map((o) => o.source).join('\n');
         const combinedTranslation = overlays.map((o) => o.translation).join('\n');
@@ -130,7 +158,14 @@ export function SeePage() {
           });
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Vision processing failed');
+        if (scanId === scanGenerationRef.current) {
+          const message = isVisionPipelineError(err)
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Vision processing failed';
+          setError(message);
+        }
       } finally {
         setScanning(false);
         scanInFlightRef.current = false;
@@ -143,8 +178,14 @@ export function SeePage() {
     const video = videoRef.current;
     if (!video || !cameraOn || scanInFlightRef.current) return;
     scanInFlightRef.current = true;
-    const canvas = captureVideoFrame(video);
-    await processCanvas(canvas);
+    try {
+      const canvas = await waitForVideoFrame(video, VISION_VIDEO_FRAME_TIMEOUT_MS);
+      await processCanvas(canvas);
+    } catch (err) {
+      scanInFlightRef.current = false;
+      setScanning(false);
+      setError(err instanceof Error ? err.message : 'Camera frame capture failed');
+    }
   }, [cameraOn, processCanvas]);
 
   useEffect(() => {
@@ -204,6 +245,7 @@ export function SeePage() {
       await visionService.downloadTier(tierId, isOnline, (pack) => {
         setPacks((prev) => prev.map((p) => (p.tierId === pack.tierId ? pack : p)));
       });
+      await visionService.repairTier(tierId);
       await reloadPacks();
       setActiveTierId(tierId);
       setAnnouncement(`${getVisionTier(tierId).label} pack ready`);
@@ -231,8 +273,18 @@ export function SeePage() {
   };
 
   const activePackReady = activeTierId
-    ? packs.find((p) => p.tierId === activeTierId)?.status === 'ready'
+    ? (() => {
+        const pack = packs.find((p) => p.tierId === activeTierId);
+        return pack ? isVisionPackOperational(pack) : false;
+      })()
     : false;
+
+  useEffect(() => {
+    if (!activeTierId || !activePackReady) return;
+    void visionService.warmUp(activeTierId).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to load vision models');
+    });
+  }, [activeTierId, activePackReady]);
 
   return (
     <section className="page see-page" aria-labelledby="see-heading">
@@ -319,7 +371,7 @@ export function SeePage() {
 
       <div ref={viewportRef} className="see-viewport-wrap">
         <CameraViewport videoRef={videoRef} mirror={false}>
-          <TranslationOverlay labels={labels} scanning={scanning} />
+          <TranslationOverlay labels={labels} scanning={scanning} live={mode === 'live'} />
         </CameraViewport>
       </div>
 

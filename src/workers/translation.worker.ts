@@ -4,10 +4,10 @@ import {
   type TranslationPipeline,
 } from '@huggingface/transformers';
 import {
-  TRANSLATION_MODEL_JA_EN,
   TRANSLATION_TEST_MIN_LENGTH,
   TRANSLATION_TEST_SENTENCE,
 } from '../config/app';
+import { HF_CDN_MIRROR } from '../config/languagePack';
 import {
   countNonBlankSegments,
   reassembleTranslation,
@@ -27,11 +27,18 @@ import {
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+env.remoteHost = 'https://huggingface.co/';
+
+if (env.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.numThreads = 1;
+  env.backends.onnx.wasm.wasmPaths = `${HF_CDN_MIRROR}${env.version}/dist/`;
+}
 
 let translator: TranslationPipeline | null = null;
 let executionMode: 'webgpu' | 'wasm' = 'wasm';
 let activeModelId = '';
 let cancelledRequestId: number | null = null;
+let messageChain: Promise<void> = Promise.resolve();
 
 function post(message: WorkerOutbound): void {
   self.postMessage(message);
@@ -52,12 +59,9 @@ async function detectWebGpu(): Promise<boolean> {
   }
 }
 
-async function createPipeline(modelId: string, preferWebGpu: boolean): Promise<TranslationPipeline> {
-  const canWebGpu = preferWebGpu && (await detectWebGpu());
-  const device = canWebGpu ? 'webgpu' : 'wasm';
+async function buildPipeline(modelId: string, device: 'webgpu' | 'wasm'): Promise<TranslationPipeline> {
   executionMode = device;
-
-  postProgress({ status: 'preparing', progress: 0 });
+  postProgress({ status: 'preparing', progress: 0, file: modelId });
 
   const pipe = await pipeline('translation', modelId, {
     device,
@@ -70,7 +74,30 @@ async function createPipeline(modelId: string, preferWebGpu: boolean): Promise<T
   return pipe as TranslationPipeline;
 }
 
+async function createPipelineWithFallback(
+  modelId: string,
+  preferWebGpu: boolean,
+): Promise<TranslationPipeline> {
+  const canWebGpu = preferWebGpu && (await detectWebGpu());
+
+  if (canWebGpu) {
+    try {
+      return await buildPipeline(modelId, 'webgpu');
+    } catch {
+      postProgress({
+        status: 'retrying',
+        progress: 0,
+        file: 'Falling back to WASM…',
+      });
+      translator = null;
+    }
+  }
+
+  return buildPipeline(modelId, 'wasm');
+}
+
 async function validateModel(pipe: TranslationPipeline): Promise<string> {
+  postProgress({ status: 'validating', progress: 99 });
   const result = await pipe(TRANSLATION_TEST_SENTENCE);
   const text = extractTranslationText(result);
   if (text.length < TRANSLATION_TEST_MIN_LENGTH) {
@@ -92,7 +119,7 @@ async function handleInit(modelId: string, preferWebGpu: boolean): Promise<void>
     return;
   }
 
-  translator = await createPipeline(modelId, preferWebGpu);
+  translator = await createPipelineWithFallback(modelId, preferWebGpu);
   activeModelId = modelId;
   await validateModel(translator);
 
@@ -177,46 +204,62 @@ async function handleTranslate(requestId: number, text: string): Promise<void> {
   }
 }
 
-self.addEventListener('message', async (event: MessageEvent<WorkerInbound>) => {
+function enqueue(task: () => Promise<void>): void {
+  messageChain = messageChain.then(task, task);
+}
+
+self.addEventListener('message', (event: MessageEvent<WorkerInbound>) => {
   const { type, payload } = event.data;
 
-  try {
-    switch (type) {
-      case WORKER_MESSAGE.INIT:
-        await handleInit(payload.modelId, payload.preferWebGpu);
-        break;
-      case WORKER_MESSAGE.TRANSLATE:
-        await handleTranslate(payload.requestId, payload.text);
-        break;
-      case WORKER_MESSAGE.CANCEL:
-        cancelledRequestId = payload.requestId;
-        break;
-      case WORKER_MESSAGE.DISPOSE:
-        translator = null;
-        activeModelId = '';
-        break;
-      case WORKER_MESSAGE.HEALTH:
-        post({
-          type: WORKER_MESSAGE.READY,
-          payload: {
-            modelId: activeModelId || TRANSLATION_MODEL_JA_EN,
-            executionMode,
-            validatedAt: Date.now(),
-          },
-        });
-        break;
-      default:
-        break;
+  enqueue(async () => {
+    try {
+      switch (type) {
+        case WORKER_MESSAGE.INIT:
+          await handleInit(payload.modelId, payload.preferWebGpu);
+          break;
+        case WORKER_MESSAGE.TRANSLATE:
+          await handleTranslate(payload.requestId, payload.text);
+          break;
+        case WORKER_MESSAGE.CANCEL:
+          cancelledRequestId = payload.requestId;
+          break;
+        case WORKER_MESSAGE.DISPOSE:
+          translator = null;
+          activeModelId = '';
+          break;
+        case WORKER_MESSAGE.HEALTH:
+          if (translator && activeModelId) {
+            post({
+              type: WORKER_MESSAGE.READY,
+              payload: {
+                modelId: activeModelId,
+                executionMode,
+                validatedAt: Date.now(),
+              },
+            });
+          } else {
+            post({
+              type: WORKER_MESSAGE.ERROR,
+              payload: {
+                code: 'PACK_MISSING',
+                message: 'Model not loaded',
+              },
+            });
+          }
+          break;
+        default:
+          break;
+      }
+    } catch (err) {
+      post({
+        type: WORKER_MESSAGE.ERROR,
+        payload: {
+          code: 'INIT_FAILED',
+          message: err instanceof Error ? err.message : 'Worker error',
+        },
+      });
     }
-  } catch (err) {
-    post({
-      type: WORKER_MESSAGE.ERROR,
-      payload: {
-        code: 'INIT_FAILED',
-        message: err instanceof Error ? err.message : 'Worker error',
-      },
-    });
-  }
+  });
 });
 
 export {};

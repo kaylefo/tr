@@ -674,6 +674,7 @@ select {
   position: absolute;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
   padding: 6px 8px;
   border-radius: 8px;
@@ -683,6 +684,18 @@ select {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(4px);
   max-width: min(92vw, 360px);
+}
+
+.translation-overlay__label--live {
+  background: rgba(12, 12, 14, 0.55);
+  backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  padding: 4px 8px;
+}
+
+.translation-overlay__status--hint {
+  opacity: 0.85;
 }
 
 .translation-overlay__source {

@@ -5,9 +5,10 @@ import { wrapOverlayText } from '../modules/vision/imageProcessing';
 interface TranslationOverlayProps {
   labels: OverlayLabel[];
   scanning: boolean;
+  live?: boolean;
 }
 
-export function TranslationOverlay({ labels, scanning }: TranslationOverlayProps) {
+export function TranslationOverlay({ labels, scanning, live = false }: TranslationOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -20,23 +21,34 @@ export function TranslationOverlay({ labels, scanning }: TranslationOverlayProps
 
   return (
     <div ref={containerRef} className="translation-overlay" aria-live="polite">
-      {scanning ? <p className="translation-overlay__status">Scanning…</p> : null}
+      {scanning ? <p className="translation-overlay__status">Translating…</p> : null}
+      {!scanning && labels.length === 0 && live ? (
+        <p className="translation-overlay__status translation-overlay__status--hint">
+          Point at Japanese text
+        </p>
+      ) : null}
       {labels.map((label) => {
-        const width = Math.max(96, label.bbox.x1 - label.bbox.x0);
-        const lines = wrapOverlayText(label.translation || label.source);
+        const width = Math.max(72, label.bbox.x1 - label.bbox.x0);
+        const height = Math.max(28, label.bbox.y1 - label.bbox.y0);
+        const lines = wrapOverlayText(label.translation || label.source, live ? 22 : 28);
+        const displayText = label.translation?.trim() || label.source;
+
         return (
           <div
             key={label.id}
-            className="translation-overlay__label"
+            className={`translation-overlay__label${live ? ' translation-overlay__label--live' : ''}`}
             style={{
               left: `${label.bbox.x0}px`,
               top: `${label.bbox.y0}px`,
               width: `${width}px`,
+              minHeight: `${height}px`,
             }}
           >
-            <span className="translation-overlay__source">{label.source}</span>
-            {lines.map((line) => (
-              <span key={line} className="translation-overlay__english">
+            {!live ? (
+              <span className="translation-overlay__source">{label.source}</span>
+            ) : null}
+            {(live ? [displayText] : lines).map((line) => (
+              <span key={`${label.id}-${line}`} className="translation-overlay__english">
                 {line}
               </span>
             ))}

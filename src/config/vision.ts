@@ -31,9 +31,13 @@ export interface VisionTierDefinition {
 
 export const VISION_OCR_TEST_TEXT = 'こんにちは';
 
-export const VISION_OCR_MIN_CONFIDENCE = 55;
+export const VISION_OCR_MIN_CONFIDENCE = 35;
+
+export const VISION_LIVE_MIN_CONFIDENCE = 25;
 
 export const VISION_LIVE_MIN_INTERVAL_MS = 450;
+
+export const VISION_LIVE_MAX_DIMENSION = 960;
 
 export const VISION_PHOTO_MAX_DIMENSION = 1920;
 
@@ -65,11 +69,11 @@ export const VISION_TIERS: VisionTierDefinition[] = [
     packId: 'vision-live-v1',
     label: 'Live',
     description: 'Continuous camera translation with vertical Japanese text support.',
-    estimatedSizeMb: 210,
+    estimatedSizeMb: 205,
     minTierForMode: 'live',
-    components: ['translation-ja-en', 'ocr-jpn-fast', 'ocr-jpn-vert'],
-    liveScanIntervalMs: 450,
-    ocrPsm: 11,
+    components: ['translation-ja-en', 'ocr-jpn-vert'],
+    liveScanIntervalMs: 800,
+    ocrPsm: 3,
   },
 ];
 
