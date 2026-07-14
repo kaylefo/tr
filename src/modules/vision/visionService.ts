@@ -1,5 +1,4 @@
 import type { VisionMode, VisionTierId } from '../../config/vision';
-import { VISION_LIVE_MIN_CONFIDENCE } from '../../config/vision';
 import { languagePackManager } from '../languagePack/languagePackManager';
 import { translationService } from '../translation/translationService';
 import { ocrService } from './ocrService';
@@ -15,13 +14,9 @@ import {
 } from '../storage/visionPackStore';
 import type { OcrLangProfile, OcrLineBox, OcrProgressPayload } from './ocrMessages';
 import type { PackComponentId } from '../../config/vision';
-import {
-  filterOcrLines,
-  mergeAdjacentLines,
-  preprocessCanvas,
-  type OverlayLabel,
-  mapOverlayLabels,
-} from './imageProcessing';
+import type { OverlayLabel } from './imageProcessing';
+import { mapOverlayLabels } from './imageProcessing';
+import { runVisionPipeline } from './visionPipeline';
 
 function componentToOcrProfile(componentId: PackComponentId): OcrLangProfile | null {
   switch (componentId) {
@@ -96,56 +91,50 @@ export class VisionService {
     imageData: ImageData,
     tierId: VisionTierId,
     psm: number,
-    mode: VisionMode = 'photo',
+    _mode: VisionMode = 'photo',
   ): Promise<OcrLineBox[]> {
     await this.initOcrForTier(tierId);
     const result = await ocrService.recognize(imageData, psm);
-    const minConfidence = mode === 'live' ? VISION_LIVE_MIN_CONFIDENCE : undefined;
-    return mergeAdjacentLines(filterOcrLines(result.lines, minConfidence));
+    return result.lines;
   }
 
-  async translateLines(lines: OcrLineBox[], isOnline: boolean): Promise<Map<string, string>> {
-    const unique = [...new Set(lines.map((l) => l.text.trim()).filter(Boolean))];
-    const map = new Map<string, string>();
+  async translateLine(text: string, isOnline: boolean): Promise<string> {
+    const cached = this.translationCache.get(text);
+    if (cached) return cached;
 
-    await Promise.all(
-      unique.map(async (source) => {
-        const cached = this.translationCache.get(source);
-        if (cached) {
-          map.set(source, cached);
-          return;
-        }
-        const translation = await translationService.translate(source, isOnline);
-        this.translationCache.set(source, translation);
-        map.set(source, translation);
-      }),
-    );
-
-    return map;
+    const translation = await translationService.translate(text, isOnline);
+    this.translationCache.set(text, translation);
+    return translation;
   }
 
   async processFrameToOverlays(
     canvas: HTMLCanvasElement,
     tierId: VisionTierId,
-    psm: number,
+    _psm: number,
     mode: VisionMode,
     displayWidth: number,
     displayHeight: number,
     isOnline: boolean,
   ): Promise<OverlayLabel[]> {
-    await this.ensureTierReady(tierId, isOnline);
-    await this.warmUp(tierId);
-    const imageData = preprocessCanvas(canvas, mode);
-    const lines = await this.recognizeImage(imageData, tierId, psm, mode);
-    const translations = await this.translateLines(lines, isOnline);
-    return mapOverlayLabels(
-      lines,
-      translations,
-      imageData.width,
-      imageData.height,
-      displayWidth,
-      displayHeight,
+    const result = await runVisionPipeline(
+      {
+        canvas,
+        tierId,
+        mode,
+        displayWidth,
+        displayHeight,
+        isOnline,
+      },
+      {
+        ensureTierReady: (id, online) => this.ensureTierReady(id, online),
+        warmUp: (id) => this.warmUp(id),
+        recognize: (imageData, id, psm, visionMode) =>
+          this.recognizeImage(imageData, id, psm, visionMode),
+        translateLine: (text, online) => this.translateLine(text, online),
+      },
     );
+
+    return result.overlays;
   }
 
   async processImageToOverlays(
@@ -157,8 +146,15 @@ export class VisionService {
     isOnline: boolean,
     mode: VisionMode = 'photo',
   ): Promise<OverlayLabel[]> {
+    await this.ensureTierReady(tierId, isOnline);
+    await this.warmUp(tierId);
     const lines = await this.recognizeImage(imageData, tierId, psm, mode);
-    const translations = await this.translateLines(lines, isOnline);
+    const translations = new Map<string, string>();
+    for (const line of lines) {
+      const source = line.text.trim();
+      if (!source) continue;
+      translations.set(source, await this.translateLine(source, isOnline));
+    }
     return mapOverlayLabels(
       lines,
       translations,

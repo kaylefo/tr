@@ -11,9 +11,51 @@ export function containsJapanese(text: string): boolean {
   return JAPANESE_RE.test(text);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function computeCoverTransform(
+  sourceWidth: number,
+  sourceHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { scale: number; offsetX: number; offsetY: number } {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || displayWidth <= 0 || displayHeight <= 0) {
+    return { scale: 1, offsetX: 0, offsetY: 0 };
+  }
+
+  const sourceAspect = sourceWidth / sourceHeight;
+  const displayAspect = displayWidth / displayHeight;
+
+  if (sourceAspect > displayAspect) {
+    const scale = displayHeight / sourceHeight;
+    return {
+      scale,
+      offsetX: (displayWidth - sourceWidth * scale) / 2,
+      offsetY: 0,
+    };
+  }
+
+  const scale = displayWidth / sourceWidth;
+  return {
+    scale,
+    offsetX: 0,
+    offsetY: (displayHeight - sourceHeight * scale) / 2,
+  };
+}
+
+export function assertValidImageDimensions(width: number, height: number): void {
+  if (width <= 0 || height <= 0) {
+    throw new Error('Image has no pixels. Wait for the camera to focus or choose another photo.');
+  }
+}
+
 export function preprocessCanvas(source: HTMLCanvasElement, mode: 'photo' | 'live' = 'photo'): ImageData {
   const maxDim = mode === 'live' ? VISION_LIVE_MAX_DIMENSION : VISION_PHOTO_MAX_DIMENSION;
   let { width, height } = source;
+
+  assertValidImageDimensions(width, height);
   if (width > maxDim || height > maxDim) {
     const scale = maxDim / Math.max(width, height);
     width = Math.round(width * scale);
@@ -46,13 +88,33 @@ export function preprocessCanvas(source: HTMLCanvasElement, mode: 'photo' | 'liv
 }
 
 export function captureVideoFrame(video: HTMLVideoElement): HTMLCanvasElement {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  if (width <= 0 || height <= 0) {
+    throw new Error('Camera frame not ready. Wait a moment and try again.');
+  }
+
   const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas unavailable');
-  ctx.drawImage(video, 0, 0);
+  ctx.drawImage(video, 0, 0, width, height);
   return canvas;
+}
+
+export async function waitForVideoFrame(
+  video: HTMLVideoElement,
+  timeoutMs = 5000,
+): Promise<HTMLCanvasElement> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return captureVideoFrame(video);
+    }
+    await sleep(50);
+  }
+  throw new Error('Camera frame not ready. Point the camera at text and wait a moment.');
 }
 
 export function filterOcrLines(lines: OcrLineBox[], minConfidence = VISION_OCR_MIN_CONFIDENCE): OcrLineBox[] {
@@ -107,9 +169,20 @@ export function mapOverlayLabels(
   sourceHeight: number,
   displayWidth: number,
   displayHeight: number,
+  useCoverTransform = true,
 ): OverlayLabel[] {
-  const scaleX = displayWidth / sourceWidth;
-  const scaleY = displayHeight / sourceHeight;
+  const { scale, offsetX, offsetY } = useCoverTransform
+    ? computeCoverTransform(sourceWidth, sourceHeight, displayWidth, displayHeight)
+    : {
+        scale: displayWidth / sourceWidth,
+        offsetX: 0,
+        offsetY: 0,
+      };
+
+  const mapCoord = (value: number, axis: 'x' | 'y'): number => {
+    const offset = axis === 'x' ? offsetX : offsetY;
+    return offset + value * scale;
+  };
 
   return lines.map((line, index) => {
     const translation = translations.get(line.text.trim()) ?? '';
@@ -119,10 +192,10 @@ export function mapOverlayLabels(
       translation,
       confidence: line.confidence,
       bbox: {
-        x0: line.bbox.x0 * scaleX,
-        y0: line.bbox.y0 * scaleY,
-        x1: line.bbox.x1 * scaleX,
-        y1: line.bbox.y1 * scaleY,
+        x0: mapCoord(line.bbox.x0, 'x'),
+        y0: mapCoord(line.bbox.y0, 'y'),
+        x1: mapCoord(line.bbox.x1, 'x'),
+        y1: mapCoord(line.bbox.y1, 'y'),
       },
     };
   });

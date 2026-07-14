@@ -4,13 +4,15 @@ import { getVisionTier, tierSupportsMode, VISION_LIVE_MIN_INTERVAL_MS } from '..
 import { useConnectivity } from '../hooks/useConnectivity';
 import { CameraViewport, TranslationOverlay } from '../components/TranslationOverlay';
 import {
-  captureVideoFrame,
+  waitForVideoFrame,
   type OverlayLabel,
 } from '../modules/vision/imageProcessing';
+import { isVisionPipelineError } from '../modules/vision/visionPipeline';
 import { getActiveVisionPackForMode, isVisionPackOperational, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
 import { visionService } from '../modules/vision/visionService';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { TRANSLATION_MODEL_JA_EN } from '../config/app';
+import { VISION_VIDEO_FRAME_TIMEOUT_MS } from '../config/languagePack';
 
 const VisionPackPanel = lazy(() =>
   import('../components/VisionPackPanel').then((m) => ({ default: m.VisionPackPanel })),
@@ -79,6 +81,26 @@ export function SeePage() {
       if (!video) throw new Error('Camera preview unavailable');
       video.srcObject = stream;
       await video.play();
+      await new Promise<void>((resolve, reject) => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve();
+          return;
+        }
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('Camera preview failed to start'));
+        };
+        const cleanup = () => {
+          video.removeEventListener('loadeddata', onReady);
+          video.removeEventListener('error', onError);
+        };
+        video.addEventListener('loadeddata', onReady, { once: true });
+        video.addEventListener('error', onError, { once: true });
+      });
       setCameraOn(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Camera access failed');
@@ -103,7 +125,6 @@ export function SeePage() {
       setError(null);
 
       try {
-        await visionService.ensureTierReady(activeTierId, isOnline);
         const viewport = viewportRef.current;
         const displayWidth = viewport?.clientWidth ?? canvas.width;
         const displayHeight = viewport?.clientHeight ?? canvas.height;
@@ -138,7 +159,12 @@ export function SeePage() {
         }
       } catch (err) {
         if (scanId === scanGenerationRef.current) {
-          setError(err instanceof Error ? err.message : 'Vision processing failed');
+          const message = isVisionPipelineError(err)
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Vision processing failed';
+          setError(message);
         }
       } finally {
         setScanning(false);
@@ -152,8 +178,14 @@ export function SeePage() {
     const video = videoRef.current;
     if (!video || !cameraOn || scanInFlightRef.current) return;
     scanInFlightRef.current = true;
-    const canvas = captureVideoFrame(video);
-    await processCanvas(canvas);
+    try {
+      const canvas = await waitForVideoFrame(video, VISION_VIDEO_FRAME_TIMEOUT_MS);
+      await processCanvas(canvas);
+    } catch (err) {
+      scanInFlightRef.current = false;
+      setScanning(false);
+      setError(err instanceof Error ? err.message : 'Camera frame capture failed');
+    }
   }, [cameraOn, processCanvas]);
 
   useEffect(() => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { tierSupportsMode, getVisionTier } from '../../config/vision';
-import { mergeAdjacentLines, containsJapanese, wrapOverlayText } from './imageProcessing';
+import {
+  assertValidImageDimensions,
+  mergeAdjacentLines,
+  containsJapanese,
+  wrapOverlayText,
+} from './imageProcessing';
 import type { OcrLineBox } from './ocrMessages';
 
 describe('vision tiers', () => {
@@ -50,5 +55,9 @@ describe('image processing', () => {
   it('wraps overlay text', () => {
     const lines = wrapOverlayText('This is a longer English translation line for display');
     expect(lines.length).toBeGreaterThan(1);
+  });
+
+  it('rejects zero-size dimensions', () => {
+    expect(() => assertValidImageDimensions(0, 0)).toThrow(/no pixels/i);
   });
 });
