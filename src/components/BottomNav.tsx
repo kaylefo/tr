@@ -2,6 +2,7 @@ import type { MainTab } from '../config/app';
 
 const tabs: { id: MainTab; label: string; icon: string }[] = [
   { id: 'convert', label: 'Convert', icon: '¥' },
+  { id: 'see', label: 'See', icon: '◉' },
   { id: 'translate', label: 'Translate', icon: 'Aa' },
   { id: 'history', label: 'History', icon: '◷' },
   { id: 'settings', label: 'Settings', icon: '⚙' },

@@ -21,7 +21,7 @@ export function FirstUseSheet({ open, onDismiss }: FirstUseSheetProps) {
         <ul className="sheet__list">
           <li>The converter fetches the newest reference rate when you are connected.</li>
           <li>Your saved rate keeps converting offline.</li>
-          <li>Offline translation needs a one-time model download in Translate or Settings.</li>
+          <li>See, Translate, and Settings let you download offline language packs for camera and text translation.</li>
           <li>Your text and history never leave this device.</li>
         </ul>
         <button type="button" className="button" onClick={onDismiss}>
