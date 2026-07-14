@@ -123,8 +123,6 @@ class OcrService {
   private activeProfile: OcrLangProfile | null = null;
   private initPromise: Promise<void> | null = null;
   private pendingProfile: OcrLangProfile | null = null;
-  /** Profiles whose traineddata is cached locally even if worker init was deferred. */
-  private readonly cachedProfiles = new Set<OcrLangProfile>();
 
   async downloadComponent(
     componentId: PackComponentId,
@@ -152,7 +150,6 @@ class OcrService {
         await withTimeout(
           this.loadProfileInternal(profile, onProgress, {
             cacheMethod: attempt === 1 ? 'write' : 'refresh',
-            allowDeferredInit: true,
           }),
           OCR_DOWNLOAD_TIMEOUT_MS,
           `${label} download timed out after ${Math.round(OCR_DOWNLOAD_TIMEOUT_MS / 60000)} minutes. Check Wi‑Fi and tap Retry.`,
@@ -160,7 +157,6 @@ class OcrService {
 
         stopHeartbeat();
         onProgress({ status: `${label} ready`, progress: 100 });
-        await this.dispose();
         return;
       } catch (err) {
         stopHeartbeat();
@@ -170,12 +166,6 @@ class OcrService {
           await sleep(PACK_DOWNLOAD_RETRY_DELAY_MS * attempt);
         }
       }
-    }
-
-    if (this.cachedProfiles.has(profile)) {
-      onProgress({ status: `${label} ready (cached)`, progress: 100 });
-      await this.dispose();
-      return;
     }
 
     throw lastError ?? new Error('OCR download failed');
@@ -193,7 +183,6 @@ class OcrService {
     onProgress: (payload: OcrProgressPayload) => void,
     options: {
       cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
-      allowDeferredInit?: boolean;
       initTimeoutMs?: number;
     } = {},
   ): Promise<void> {
@@ -205,7 +194,6 @@ class OcrService {
     if (this.initPromise) {
       await this.initPromise;
       if (this.activeProfile === profile) return;
-      if (options.allowDeferredInit && this.cachedProfiles.has(profile)) return;
     }
 
     this.initPromise = this.loadProfile(profile, onProgress, options).finally(() => {
@@ -220,7 +208,6 @@ class OcrService {
     onProgress: (payload: OcrProgressPayload) => void,
     options: {
       cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
-      allowDeferredInit?: boolean;
       initTimeoutMs?: number;
     } = {},
   ): Promise<void> {
@@ -244,11 +231,6 @@ class OcrService {
       }
     }
 
-    if (options.allowDeferredInit && this.cachedProfiles.has(profile)) {
-      onProgress({ status: 'OCR ready (cached)', progress: 100 });
-      return;
-    }
-
     throw toError(lastError, 'OCR initialization failed');
   }
 
@@ -258,19 +240,16 @@ class OcrService {
     onProgress: (payload: OcrProgressPayload) => void,
     options: {
       cacheMethod?: 'read' | 'write' | 'refresh' | 'none';
-      allowDeferredInit?: boolean;
       initTimeoutMs?: number;
     } = {},
   ): Promise<void> {
     const initTimeoutMs = options.initTimeoutMs ?? OCR_WORKER_INIT_TIMEOUT_MS;
     let lastReported = 0;
-    let languageDataLoaded = false;
 
     onProgress({ status: formatOcrStatus('loading tesseract core', langs), progress: 5 });
 
-    try {
-      const worker = await withTimeout(
-        createWorker(langs, 1, {
+    const worker = await withTimeout(
+      createWorker(langs, 1, {
           ...tesseractCdnOptions(options.cacheMethod),
           langPath: profileToLangPath(profile),
           logger: (msg) => {
@@ -282,17 +261,6 @@ class OcrService {
             if (progress != null) lastReported = progress;
 
             const status = msg.status ?? 'downloading';
-            if (nextProgress >= 85) {
-              languageDataLoaded = true;
-            }
-            if (
-              (status === 'loading language traineddata' && nextProgress >= 99) ||
-              status === 'initialized api' ||
-              status === 'initializing api'
-            ) {
-              languageDataLoaded = true;
-            }
-
             onProgress({
               status: formatOcrStatus(status, langs),
               progress: nextProgress > 0 ? nextProgress : undefined,
@@ -301,24 +269,14 @@ class OcrService {
           errorHandler: (err) => {
             console.error('[OCR]', err);
           },
-        }),
-        initTimeoutMs,
-        'OCR worker initialization timed out',
-      );
+      }),
+      initTimeoutMs,
+      'OCR worker initialization timed out',
+    );
 
-      this.worker = worker;
-      this.activeProfile = profile;
-      this.cachedProfiles.add(profile);
-      onProgress({ status: 'OCR ready', progress: 100 });
-    } catch (err) {
-      if (options.allowDeferredInit && languageDataLoaded) {
-        this.cachedProfiles.add(profile);
-        this.pendingProfile = profile;
-        onProgress({ status: 'OCR ready (cached)', progress: 100 });
-        return;
-      }
-      throw err;
-    }
+    this.worker = worker;
+    this.activeProfile = profile;
+    onProgress({ status: 'OCR ready', progress: 100 });
   }
 
   async recognize(

@@ -74,6 +74,7 @@ export class TranslationService {
   private requestCounter = 0;
   private latestRequestId = 0;
   private downloadPromise: Promise<OfflinePackRecord> | null = null;
+  private downloadGeneration = 0;
 
   private readonly pending = new Map<
     number,
@@ -150,9 +151,15 @@ export class TranslationService {
 
   private async handleWorkerMessage(message: WorkerOutbound): Promise<void> {
     switch (message.type) {
-      case WORKER_MESSAGE.DOWNLOAD_PROGRESS:
-      case WORKER_MESSAGE.PARTIAL: {
+      case WORKER_MESSAGE.DOWNLOAD_PROGRESS: {
         const pack = await this.persistProgress(message.payload);
+        this.progressEvents.emit({ payload: message.payload, pack });
+        break;
+      }
+      case WORKER_MESSAGE.PARTIAL: {
+        // Inference progress is not download progress. Persisting it as
+        // "downloading" corrupts a ready pack while translating vision lines.
+        const pack = await getJaEnPack();
         this.progressEvents.emit({ payload: message.payload, pack });
         break;
       }
@@ -255,23 +262,52 @@ export class TranslationService {
       throw new TranslationError('OFFLINE_NO_PACK');
     }
 
+    if (typeof window !== 'undefined' && window.__JP_E2E__?.mockPackDownload) {
+      const pack = await getJaEnPack();
+      const ready: OfflinePackRecord = {
+        ...pack,
+        status: 'ready',
+        modelId: TRANSLATION_MODEL_JA_EN,
+        executionMode: 'wasm',
+        lastValidatedAt: Date.now(),
+        errorMessage: undefined,
+      };
+      await saveOfflinePack(ready);
+      return ready;
+    }
+
     if (this.downloadPromise) {
       return this.downloadPromise;
     }
 
-    this.downloadPromise = this.runDownloadWithRetry(isOnline).finally(() => {
-      this.downloadPromise = null;
+    const generation = ++this.downloadGeneration;
+    const promise = this.runDownloadWithRetry(isOnline, generation);
+    const trackedPromise = promise.finally(() => {
+      if (this.downloadPromise === trackedPromise) {
+        this.downloadPromise = null;
+      }
     });
+    this.downloadPromise = trackedPromise;
 
     return this.downloadPromise;
   }
 
-  private async runDownloadWithRetry(_isOnline: boolean): Promise<OfflinePackRecord> {
+  private assertCurrentDownload(generation: number): void {
+    if (generation !== this.downloadGeneration) {
+      throw new TranslationError('CANCELLED');
+    }
+  }
+
+  private async runDownloadWithRetry(
+    _isOnline: boolean,
+    generation: number,
+  ): Promise<OfflinePackRecord> {
     await this.requestPersistentStorage();
 
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= PACK_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+      this.assertCurrentDownload(generation);
       const pack = await getJaEnPack();
       await saveOfflinePack({
         ...pack,
@@ -288,18 +324,28 @@ export class TranslationService {
           TRANSLATION_DOWNLOAD_TIMEOUT_MS,
           normalizeTranslationError('DOWNLOAD_INTERRUPTED'),
         );
+        this.assertCurrentDownload(generation);
         return getJaEnPack();
       } catch (err) {
         lastError = err instanceof Error ? err : new Error('Download failed');
+        await this.resetWorker();
+        if (err instanceof TranslationError && err.code === 'CANCELLED') {
+          throw err;
+        }
         if (attempt < PACK_DOWNLOAD_MAX_ATTEMPTS) {
-          await this.resetWorker();
           await sleep(PACK_DOWNLOAD_RETRY_DELAY_MS * attempt);
         }
       }
     }
 
+    this.assertCurrentDownload(generation);
     const code: TranslationErrorCode = 'INIT_FAILED';
-    await this.markPackFailed(code);
+    const pack = await this.markPackFailed(code);
+    this.errorEvents.emit({
+      message: lastError?.message ?? normalizeTranslationError(code),
+      code,
+      pack,
+    });
     throw lastError ?? new TranslationError(code);
   }
 
@@ -408,6 +454,7 @@ export class TranslationService {
   }
 
   async deletePack(): Promise<void> {
+    this.downloadGeneration += 1;
     await this.resetWorker();
     this.downloadPromise = null;
     this.resultCache.clear();

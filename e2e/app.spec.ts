@@ -17,6 +17,13 @@ test.describe('Japan Pocket', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('jp-first-use-seen', '1');
+      window.__JP_E2E__ = {
+        mockTranslate: true,
+        mockPackDownload: true,
+        translations: {
+          こんにちは: 'Hello',
+        },
+      };
       localStorage.setItem(
         'jp-rate-emergency',
         JSON.stringify({
@@ -68,6 +75,40 @@ test.describe('Japan Pocket', () => {
     await expect(page.getByText('Offline Translation Pack')).toBeVisible();
   });
 
+  test('downloads translation pack, translates, and persists history', async ({
+    page,
+  }) => {
+    page.on('dialog', (dialog) => void dialog.accept());
+    await page.getByRole('button', { name: 'Translate' }).click();
+    await page.getByRole('button', { name: 'Download offline pack' }).click();
+    await expect(page.getByText('Offline translation ready')).toBeVisible();
+
+    await page.getByLabel('Japanese text to translate').fill('こんにちは');
+    await expect(page.locator('.translate-result__text')).toHaveText('Hello');
+
+    await page.getByRole('button', { name: 'History' }).click();
+    await expect(page.getByText('こんにちは')).toBeVisible();
+    await expect(page.getByText('Hello')).toBeVisible();
+  });
+
+  test('persists settings across reload', async ({ page }) => {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByLabel('Appearance').getByRole('radio', { name: 'Dark' }).click();
+    await page.getByText('Default direction').locator('..').getByRole('combobox').selectOption(
+      'USD_TO_JPY',
+    );
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(
+      page.getByText('Default direction').locator('..').getByRole('combobox'),
+    ).toHaveValue('USD_TO_JPY');
+    await page.reload();
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(
+      page.getByText('Default direction').locator('..').getByRole('combobox'),
+    ).toHaveValue('USD_TO_JPY');
+  });
+
   test('appearance setting works', async ({ page }) => {
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('radio', { name: 'Dark' }).click();
@@ -75,7 +116,15 @@ test.describe('Japan Pocket', () => {
   });
 
   test('offline shell reload', async ({ page, context }) => {
-    await page.waitForLoadState('networkidle');
+    await page.evaluate(async () => {
+      if ('serviceWorker' in navigator) {
+        await navigator.serviceWorker.ready;
+      }
+    });
+    if (!(await page.evaluate(() => Boolean(navigator.serviceWorker?.controller)))) {
+      await page.reload();
+      await page.waitForSelector('#convert-heading', { state: 'visible' });
+    }
     await context.setOffline(true);
     await page.reload();
     await page.waitForSelector('#convert-heading', { state: 'visible' });
@@ -91,6 +140,10 @@ test.describe('Japan Pocket · offline translation', () => {
   });
 
   test('translates offline after reload', async ({ page, context }) => {
+    test.skip(
+      !process.env.FULL_MODEL_E2E,
+      'Real 80 MB model download runs only in the explicit full-model suite',
+    );
     test.setTimeout(300_000);
     page.on('dialog', (dialog) => void dialog.accept());
 

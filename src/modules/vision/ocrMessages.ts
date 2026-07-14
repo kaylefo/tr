@@ -87,9 +87,6 @@ export function profileToLangs(profile: OcrLangProfile): string {
 }
 
 export function profileToLangPath(profile: OcrLangProfile): string {
-  if (profile === 'jpn-best') {
-    return 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/jpn/4.0.0_best_int';
-  }
   const origin =
     typeof self !== 'undefined' && 'location' in self && self.location?.origin
       ? self.location.origin
@@ -99,7 +96,7 @@ export function profileToLangPath(profile: OcrLangProfile): string {
     '/'
   ).replace(/^\.\//, '/');
   const root = `${origin}${basePath.endsWith('/') ? basePath : `${basePath}/`}`;
-  return `${root}tesseract`;
+  return profile === 'jpn-best' ? `${root}tesseract/best` : `${root}tesseract`;
 }
 
 export function profileToTessdata(profile: OcrLangProfile): 'fast' | 'best' {

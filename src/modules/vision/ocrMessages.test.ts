@@ -14,7 +14,7 @@ describe('profileToLangs', () => {
   });
 
   it('uses best tessdata path for photo OCR', () => {
-    expect(profileToLangPath('jpn-best')).toContain('best_int');
+    expect(profileToLangPath('jpn-best')).toContain('tesseract/best');
   });
 });
 

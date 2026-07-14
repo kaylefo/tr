@@ -4,11 +4,11 @@ import { registerSW } from 'virtual:pwa-register';
 export function usePwaUpdate(): {
   needRefresh: boolean;
   offlineReady: boolean;
-  updateApp: () => void;
+  updateApp: () => Promise<void>;
 } {
   const [needRefresh, setNeedRefresh] = useState(false);
   const [offlineReady, setOfflineReady] = useState(false);
-  const [updateFn, setUpdateFn] = useState<(() => void) | null>(null);
+  const [updateFn, setUpdateFn] = useState<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     const updateSW = registerSW({
@@ -18,22 +18,20 @@ export function usePwaUpdate(): {
       onOfflineReady() {
         setOfflineReady(true);
       },
-      onRegisteredSW(_swUrl, registration) {
-        if (registration) {
-          setUpdateFn(() => () => {
-            registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
-            window.location.reload();
-          });
-        }
-      },
     });
-    setUpdateFn(() => updateSW);
+    // registerSW owns the activation/reload lifecycle. Calling reload ourselves
+    // races the `controlling` event and can reload twice or interrupt a download.
+    setUpdateFn(() => async () => {
+      await updateSW(true);
+    });
   }, []);
 
   return {
     needRefresh,
     offlineReady,
-    updateApp: () => updateFn?.(),
+    updateApp: async () => {
+      await updateFn?.();
+    },
   };
 }
 

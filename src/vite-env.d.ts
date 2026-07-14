@@ -6,6 +6,7 @@ declare const __BUILD_ID__: string;
 
 interface JapanPocketE2EHooks {
   mockTranslate?: boolean;
+  mockPackDownload?: boolean;
   translations?: Record<string, string>;
 }
 

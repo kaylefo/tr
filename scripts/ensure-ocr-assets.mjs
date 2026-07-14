@@ -34,6 +34,10 @@ const REMOTE_FILES = [
     'jpn_vert.traineddata',
     'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/jpn_vert.traineddata',
   ],
+  [
+    'best/jpn.traineddata',
+    'https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/jpn.traineddata',
+  ],
 ];
 
 async function exists(path) {
@@ -73,6 +77,7 @@ for (const [name, src] of LOCAL_COPIES) {
 
 for (const [name, url] of REMOTE_FILES) {
   const dest = join(outDir, name);
+  await mkdir(dirname(dest), { recursive: true });
   if (await exists(dest)) {
     console.log(`keep existing ${name}`);
     continue;

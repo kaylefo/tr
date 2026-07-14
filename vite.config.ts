@@ -11,8 +11,10 @@ function resolveBuildId(): string {
   }
 }
 
+const appBase = process.env.GITHUB_PAGES === 'true' ? '/tr/' : './';
+
 export default defineConfig({
-  base: process.env.GITHUB_PAGES === 'true' ? '/tr/' : './',
+  base: appBase,
   define: {
     __BUILD_ID__: JSON.stringify(resolveBuildId()),
   },
@@ -22,9 +24,48 @@ export default defineConfig({
       registerType: 'prompt',
       injectRegister: 'auto',
       includeAssets: ['icons/*.png', 'icons/*.svg'],
-      manifest: false,
+      manifest: {
+        name: 'Japan Pocket',
+        short_name: 'Japan Pocket',
+        description:
+          'Yen converter and offline Japanese-to-English translator for travel in Japan.',
+        id: appBase,
+        start_url: appBase,
+        scope: appBase,
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        background_color: '#f7f4ef',
+        theme_color: '#f7f4ef',
+        icons: [
+          {
+            src: `${appBase}icons/icon-192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: `${appBase}icons/icon-192-maskable.png`,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+          {
+            src: `${appBase}icons/icon-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: `${appBase}icons/icon-512-maskable.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
       workbox: {
         maximumFileSizeToCacheInBytes: 25 * 1024 * 1024,
+        // Traineddata is cached by Tesseract after the user downloads a pack.
+        // Pre-caching every profile makes initial SW installation >50 MB and
+        // can cause iOS to kill/reload the page.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//],

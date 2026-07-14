@@ -140,6 +140,7 @@ test.describe('Japan Pocket · See OCR fixture', () => {
       localStorage.setItem('jp-first-use-seen', '1');
       window.__JP_E2E__ = {
         mockTranslate: true,
+        mockPackDownload: true,
         translations: {
           ラーメン: 'Ramen',
           営業: 'Open',
@@ -240,5 +241,50 @@ test.describe('Japan Pocket · See OCR fixture', () => {
       steps.log(`fragment matches ${matches}/${MANIFEST.expectedFragments.length}`);
       expect(matches).toBeGreaterThanOrEqual(MANIFEST.minimumMatches);
     });
+  });
+
+  test('downloads, activates, and deletes every vision tier without reloading', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    const steps = new StepTracker(page);
+    let documentLoads = 0;
+    page.on('domcontentloaded', () => {
+      documentLoads += 1;
+      steps.log(`document load #${documentLoads}: ${page.url()}`);
+    });
+
+    await steps.run('open See pack manager', 15_000, async () => {
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await page.getByRole('button', { name: 'See' }).click();
+      await page.getByRole('tab', { name: 'Photo' }).click();
+      await page.getByRole('button', { name: 'Language packs' }).click();
+    });
+
+    for (const tier of ['Essential', 'Standard', 'Live'] as const) {
+      await steps.run(`download ${tier} pack`, 30_000, async () => {
+        const card = page.locator('.vision-pack-card').filter({ hasText: tier });
+        await card.getByRole('button', { name: `Download ${tier} pack` }).click();
+        await expect(
+          card.getByRole('button', { name: 'Repair / redownload' }),
+        ).toBeVisible({ timeout: 25_000 });
+        await expect(card.getByText('Ready').first()).toBeVisible();
+      });
+    }
+
+    await steps.run('verify no document reload occurred', 5_000, async () => {
+      expect(documentLoads).toBe(1);
+      await expect(page.getByRole('heading', { name: 'See' })).toBeVisible();
+    });
+
+    for (const tier of ['Essential', 'Standard', 'Live'] as const) {
+      await steps.run(`delete ${tier} pack`, 10_000, async () => {
+        const card = page.locator('.vision-pack-card').filter({ hasText: tier });
+        await card.getByRole('button', { name: 'Delete pack' }).click();
+        await expect(
+          card.getByRole('button', { name: `Download ${tier} pack` }),
+        ).toBeVisible({ timeout: 8_000 });
+      });
+    }
   });
 });
