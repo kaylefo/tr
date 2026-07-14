@@ -82,3 +82,53 @@ test.describe('Japan Pocket', () => {
     await expect(page.getByRole('heading', { name: 'Convert' })).toBeVisible();
   });
 });
+
+// Downloads the real on-device model (~80MB) once, then proves translation keeps
+// working after an OFFLINE reload — the exact regression this change fixes.
+test.describe('Japan Pocket · offline translation', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('jp-first-use-seen', '1');
+    });
+  });
+
+  test('translates offline after reload', async ({ page, context }) => {
+    test.setTimeout(300_000);
+    page.on('dialog', (dialog) => void dialog.accept());
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Translate' }).click();
+    await expect(page.getByRole('heading', { name: 'Translate' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Download offline pack' }).click();
+    await expect(
+      page.locator('.offline-pack').getByText('Offline translation ready'),
+    ).toBeVisible({ timeout: 240_000 });
+
+    const source = page.getByLabel('Japanese text to translate');
+    const result = page.locator('.translate-result__text');
+
+    await source.fill('これはいくらですか？');
+    await expect(result).not.toHaveText('', { timeout: 60_000 });
+    const online = (await result.textContent())?.trim() ?? '';
+    expect(online.length).toBeGreaterThan(1);
+
+    // Go fully offline and restart the app: a fresh worker must re-load the
+    // cached model without any network access.
+    await context.setOffline(true);
+    await page.reload();
+    await page.getByRole('button', { name: 'Translate' }).click();
+    await expect(page.getByRole('heading', { name: 'Translate' })).toBeVisible();
+    await expect(
+      page.locator('.offline-pack').getByText('Offline translation ready'),
+    ).toBeVisible({ timeout: 60_000 });
+
+    const source2 = page.getByLabel('Japanese text to translate');
+    const result2 = page.locator('.translate-result__text');
+    await source2.fill('ありがとうございます');
+    await expect(result2).not.toHaveText('', { timeout: 60_000 });
+    const offline = (await result2.textContent())?.trim() ?? '';
+    expect(offline.length).toBeGreaterThan(1);
+    expect(offline).not.toContain('Download the offline pack');
+  });
+});

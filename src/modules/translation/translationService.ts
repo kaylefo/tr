@@ -14,23 +14,94 @@ type ProgressListener = (payload: WorkerProgressPayload) => void;
 type ReadyListener = (payload: WorkerReadyPayload) => void;
 type ErrorListener = (message: string, code?: TranslationErrorCode) => void;
 
+export interface TranslationListeners {
+  onProgress?: ProgressListener;
+  onReady?: ReadyListener;
+  onError?: ErrorListener;
+}
+
+const KNOWN_ERROR_CODES = new Set<TranslationErrorCode>([
+  'MODEL_NOT_DOWNLOADED',
+  'DOWNLOAD_INTERRUPTED',
+  'INSUFFICIENT_STORAGE',
+  'INIT_FAILED',
+  'INPUT_TOO_LONG',
+  'CANCELLED',
+  'FEATURE_UNAVAILABLE',
+  'PACK_MISSING',
+  'CACHE_REMOVED',
+  'INFERENCE_FAILED',
+  'OFFLINE_NO_PACK',
+]);
+
+function toErrorCode(code: string | undefined): TranslationErrorCode {
+  return code && KNOWN_ERROR_CODES.has(code as TranslationErrorCode)
+    ? (code as TranslationErrorCode)
+    : 'INFERENCE_FAILED';
+}
+
+/** Error carrying a machine-readable translation error code. */
+export class TranslationError extends Error {
+  readonly code: TranslationErrorCode;
+  constructor(code: TranslationErrorCode) {
+    super(normalizeTranslationError(code));
+    this.code = code;
+    this.name = 'TranslationError';
+  }
+}
+
+const RESULT_CACHE_LIMIT = 200;
+
 export class TranslationService {
   private worker: Worker | null = null;
   private requestCounter = 0;
   private latestRequestId = 0;
-  private onProgress: ProgressListener | null = null;
-  private onReady: ReadyListener | null = null;
-  private onError: ErrorListener | null = null;
-  private initPromise: Promise<void> | null = null;
 
-  setListeners(listeners: {
-    onProgress?: ProgressListener;
-    onReady?: ReadyListener;
-    onError?: ErrorListener;
-  }): void {
-    this.onProgress = listeners.onProgress ?? null;
-    this.onReady = listeners.onReady ?? null;
-    this.onError = listeners.onError ?? null;
+  private readonly progressListeners = new Set<ProgressListener>();
+  private readonly readyListeners = new Set<ReadyListener>();
+  private readonly errorListeners = new Set<ErrorListener>();
+
+  /** In-flight translate requests keyed by request id. */
+  private readonly pending = new Map<
+    number,
+    { resolve: (value: string) => void; reject: (error: TranslationError) => void }
+  >();
+
+  /** Idempotent worker initialization; shared across concurrent callers. */
+  private initPromise: Promise<WorkerReadyPayload> | null = null;
+  private initResolve: ((payload: WorkerReadyPayload) => void) | null = null;
+  private initReject: ((error: TranslationError) => void) | null = null;
+
+  /** Small LRU cache so re-translating identical text is instant. */
+  private readonly resultCache = new Map<string, string>();
+
+  /**
+   * Subscribe to worker lifecycle events. Returns an unsubscribe function.
+   * Multiple views (Translate page, See page, download panel) can listen
+   * simultaneously without clobbering each other.
+   */
+  subscribe(listeners: TranslationListeners): () => void {
+    if (listeners.onProgress) this.progressListeners.add(listeners.onProgress);
+    if (listeners.onReady) this.readyListeners.add(listeners.onReady);
+    if (listeners.onError) this.errorListeners.add(listeners.onError);
+    return () => {
+      if (listeners.onProgress) this.progressListeners.delete(listeners.onProgress);
+      if (listeners.onReady) this.readyListeners.delete(listeners.onReady);
+      if (listeners.onError) this.errorListeners.delete(listeners.onError);
+    };
+  }
+
+  private emitProgress(payload: WorkerProgressPayload): void {
+    this.progressListeners.forEach((l) => l(payload));
+  }
+
+  private emitReady(payload: WorkerReadyPayload): void {
+    this.readyListeners.forEach((l) => l(payload));
+  }
+
+  private emitError(code: TranslationErrorCode): void {
+    const message = normalizeTranslationError(code);
+    this.errorListeners.forEach((l) => l(message, code));
   }
 
   private ensureWorker(): Worker {
@@ -43,7 +114,8 @@ export class TranslationService {
         this.handleWorkerMessage(event.data);
       });
       this.worker.addEventListener('error', () => {
-        this.onError?.(normalizeTranslationError('INIT_FAILED'), 'INIT_FAILED');
+        this.failInit('INIT_FAILED');
+        this.emitError('INIT_FAILED');
       });
     }
     return this.worker;
@@ -57,37 +129,49 @@ export class TranslationService {
     switch (message.type) {
       case WORKER_MESSAGE.DOWNLOAD_PROGRESS:
       case WORKER_MESSAGE.PARTIAL:
-        this.onProgress?.(message.payload);
+        this.emitProgress(message.payload);
         break;
       case WORKER_MESSAGE.READY:
+        this.initResolve?.(message.payload);
+        this.initResolve = null;
+        this.initReject = null;
         void this.markPackReady(message.payload);
-        this.onReady?.(message.payload);
+        this.emitReady(message.payload);
         break;
-      case WORKER_MESSAGE.RESULT:
-        if (message.payload.requestId >= this.latestRequestId) {
-          this.resolveTranslate?.(message.payload.translation);
+      case WORKER_MESSAGE.RESULT: {
+        const entry = this.pending.get(message.payload.requestId);
+        if (entry) {
+          this.pending.delete(message.payload.requestId);
+          entry.resolve(message.payload.translation);
         }
         break;
-      case WORKER_MESSAGE.ERROR:
-        if (
-          message.payload.requestId === undefined ||
-          message.payload.requestId >= this.latestRequestId
-        ) {
-          const code = message.payload.code as TranslationErrorCode;
-          this.rejectTranslate?.(code);
-          if (!message.payload.requestId) {
-            void this.markPackFailed(code);
-            this.onError?.(normalizeTranslationError(code), code);
-          }
+      }
+      case WORKER_MESSAGE.ERROR: {
+        const code = toErrorCode(message.payload.code);
+        const { requestId } = message.payload;
+        if (requestId !== undefined && this.pending.has(requestId)) {
+          const entry = this.pending.get(requestId)!;
+          this.pending.delete(requestId);
+          entry.reject(new TranslationError(code));
+        } else {
+          // Initialization / global failure.
+          this.failInit(code);
+          void this.markPackFailed(code);
+          this.emitError(code);
         }
         break;
+      }
       default:
         break;
     }
   }
 
-  private resolveTranslate: ((value: string) => void) | null = null;
-  private rejectTranslate: ((code: TranslationErrorCode) => void) | null = null;
+  private failInit(code: TranslationErrorCode): void {
+    this.initReject?.(new TranslationError(code));
+    this.initResolve = null;
+    this.initReject = null;
+    this.initPromise = null;
+  }
 
   async requestPersistentStorage(): Promise<boolean> {
     if (!navigator.storage?.persist) return false;
@@ -98,45 +182,54 @@ export class TranslationService {
     }
   }
 
+  /**
+   * Ensure the worker pipeline is initialized (loading from cache when possible,
+   * so this works offline once the pack has been downloaded). Idempotent: the
+   * same promise is reused while initialization is in flight.
+   */
+  private ensureReady(preferWebGpu = true): Promise<WorkerReadyPayload> {
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = new Promise<WorkerReadyPayload>((resolve, reject) => {
+      this.initResolve = resolve;
+      this.initReject = reject;
+      this.post({
+        type: WORKER_MESSAGE.INIT,
+        payload: { modelId: TRANSLATION_MODEL_JA_EN, preferWebGpu },
+      });
+    });
+
+    return this.initPromise;
+  }
+
+  /**
+   * Proactively initialize the model when a downloaded pack exists, so the first
+   * translation after opening the app is instant. Safe to call repeatedly.
+   */
+  async warmUp(): Promise<void> {
+    const pack = await getJaEnPack();
+    if (pack.status !== 'ready') return;
+    try {
+      await this.ensureReady(true);
+    } catch {
+      /* surfaced via listeners / pack state */
+    }
+  }
+
   async downloadAndInitialize(isOnline: boolean): Promise<OfflinePackRecord> {
     if (!isOnline) {
-      throw new Error(normalizeTranslationError('OFFLINE_NO_PACK'));
+      throw new TranslationError('OFFLINE_NO_PACK');
     }
 
     await this.requestPersistentStorage();
 
     const pack = await getJaEnPack();
-    const updating: OfflinePackRecord = {
-      ...pack,
-      status: 'downloading',
-      errorMessage: undefined,
-    };
-    await saveOfflinePack(updating);
+    await saveOfflinePack({ ...pack, status: 'downloading', errorMessage: undefined });
 
-    this.initPromise = new Promise<void>((resolve, reject) => {
-      const readyHandler = (payload: WorkerReadyPayload) => {
-        this.onReady = previousReady;
-        resolve();
-        previousReady?.(payload);
-      };
-      const previousReady = this.onReady;
-      this.onReady = readyHandler;
-
-      const errorHandler = (msg: string, code?: TranslationErrorCode) => {
-        this.onError = previousError;
-        reject(new Error(msg));
-        previousError?.(msg, code);
-      };
-      const previousError = this.onError;
-      this.onError = errorHandler;
-
-      this.post({
-        type: WORKER_MESSAGE.INIT,
-        payload: { modelId: TRANSLATION_MODEL_JA_EN, preferWebGpu: true },
-      });
-    });
-
-    await this.initPromise;
+    // Force a fresh init pass so download progress is reported even if a stale
+    // init promise is lingering.
+    this.initPromise = null;
+    await this.ensureReady(true);
     return getJaEnPack();
   }
 
@@ -154,6 +247,9 @@ export class TranslationService {
 
   private async markPackFailed(code: TranslationErrorCode): Promise<void> {
     const pack = await getJaEnPack();
+    // Only downgrade the stored status if we were mid-setup; a transient
+    // inference error should not wipe a ready pack.
+    if (pack.status === 'ready' && code === 'INFERENCE_FAILED') return;
     await saveOfflinePack({
       ...pack,
       status: 'failed',
@@ -161,53 +257,43 @@ export class TranslationService {
     });
   }
 
-  async healthCheck(): Promise<boolean> {
-    const pack = await getJaEnPack();
-    if (pack.status !== 'ready') return false;
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(false), 15000);
-      const previous = this.onReady;
-      this.onReady = (payload) => {
-        clearTimeout(timeout);
-        this.onReady = previous;
-        resolve(!!payload.validatedAt);
-        previous?.(payload);
-      };
-      this.post({ type: WORKER_MESSAGE.HEALTH });
-    });
-  }
-
   async translate(text: string, isOnline: boolean): Promise<string> {
+    if (!text.trim()) return '';
+
+    const cached = this.resultCache.get(text);
+    if (cached !== undefined) {
+      // Refresh LRU recency.
+      this.resultCache.delete(text);
+      this.resultCache.set(text, cached);
+      return cached;
+    }
+
     const pack = await getJaEnPack();
     if (pack.status !== 'ready') {
-      if (!isOnline) {
-        throw new Error(normalizeTranslationError('OFFLINE_NO_PACK'));
-      }
-      throw new Error(normalizeTranslationError('MODEL_NOT_DOWNLOADED'));
+      throw new TranslationError(isOnline ? 'MODEL_NOT_DOWNLOADED' : 'OFFLINE_NO_PACK');
     }
 
-    const healthy = await this.healthCheck();
-    if (!healthy) {
-      await saveOfflinePack({
-        ...pack,
-        status: 'failed',
-        errorMessage: normalizeTranslationError('CACHE_REMOVED'),
-      });
-      throw new Error(normalizeTranslationError('CACHE_REMOVED'));
-    }
+    await this.ensureReady(true);
 
     const requestId = ++this.requestCounter;
     this.latestRequestId = requestId;
 
-    return new Promise<string>((resolve, reject) => {
-      this.resolveTranslate = resolve;
-      this.rejectTranslate = (code) => reject(new Error(normalizeTranslationError(code)));
-      this.post({
-        type: WORKER_MESSAGE.TRANSLATE,
-        payload: { requestId, text },
-      });
+    const translation = await new Promise<string>((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      this.post({ type: WORKER_MESSAGE.TRANSLATE, payload: { requestId, text } });
     });
+
+    this.cacheResult(text, translation);
+    return translation;
+  }
+
+  private cacheResult(text: string, translation: string): void {
+    if (!translation) return;
+    this.resultCache.set(text, translation);
+    if (this.resultCache.size > RESULT_CACHE_LIMIT) {
+      const oldest = this.resultCache.keys().next().value;
+      if (oldest !== undefined) this.resultCache.delete(oldest);
+    }
   }
 
   cancel(): void {
@@ -224,8 +310,13 @@ export class TranslationService {
     this.worker?.terminate();
     this.worker = null;
     this.initPromise = null;
+    this.initResolve = null;
+    this.initReject = null;
+    this.resultCache.clear();
+    this.pending.forEach((entry) => entry.reject(new TranslationError('CACHE_REMOVED')));
+    this.pending.clear();
 
-    if ('caches' in window) {
+    if ('caches' in self) {
       const keys = await caches.keys();
       await Promise.all(
         keys

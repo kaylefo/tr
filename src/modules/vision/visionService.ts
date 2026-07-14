@@ -162,7 +162,7 @@ export class VisionService {
     componentId: PackComponentId,
     onProgress: ComponentProgressHandler,
   ): Promise<void> {
-    translationService.setListeners({
+    const unsubscribe = translationService.subscribe({
       onProgress: (payload) => {
         void getVisionPack(pack.tierId).then(async (current) => {
           const updated = updateVisionComponent(current, componentId, {
@@ -175,11 +175,15 @@ export class VisionService {
       },
     });
 
-    await translationService.downloadAndInitialize(true);
+    try {
+      await translationService.downloadAndInitialize(true);
 
-    const validation = await translationService.translate(VISION_OCR_TEST_TEXT, true);
-    if (!validation.trim()) {
-      throw new Error('Translation validation failed.');
+      const validation = await translationService.translate(VISION_OCR_TEST_TEXT, true);
+      if (!validation.trim()) {
+        throw new Error('Translation validation failed.');
+      }
+    } finally {
+      unsubscribe();
     }
   }
 

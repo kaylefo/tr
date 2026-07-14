@@ -47,7 +47,7 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
     }
     setBusy(true);
     setProgress('Starting download…');
-    translationService.setListeners({
+    const unsubscribe = translationService.subscribe({
       onProgress: (p) => {
         const pct =
           p.progress != null
@@ -59,11 +59,9 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
       },
       onReady: () => {
         setProgress('');
-        setBusy(false);
         void onPackChange();
       },
       onError: () => {
-        setBusy(false);
         void onPackChange();
       },
     });
@@ -72,6 +70,7 @@ export function OfflinePackPanel({ pack, isOnline, onPackChange }: OfflinePackPa
     } catch {
       /* surfaced via pack state */
     } finally {
+      unsubscribe();
       setBusy(false);
       await onPackChange();
     }

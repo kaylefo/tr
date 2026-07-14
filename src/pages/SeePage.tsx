@@ -10,6 +10,7 @@ import {
 } from '../modules/vision/imageProcessing';
 import { getActiveVisionPack, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
 import { visionService } from '../modules/vision/visionService';
+import { translationService } from '../modules/translation/translationService';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { TRANSLATION_MODEL_JA_EN } from '../config/app';
 
@@ -48,6 +49,7 @@ export function SeePage() {
 
   useEffect(() => {
     void reloadPacks();
+    void translationService.warmUp();
   }, [reloadPacks]);
 
   const stopCamera = useCallback(() => {
