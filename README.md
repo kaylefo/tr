@@ -17,17 +17,17 @@ Everything stays on your phone. No account, ads, trackers, or backend server.
 
 ## Live deployment
 
-**Temporary (verified now):** https://clips-powered-treasure-next.trycloudflare.com
+**Production (verified):** https://kaylefo.github.io/tr/
 
-**Permanent — claim on Netlify (free, ~1 minute from iPhone):**
-1. Open https://app.netlify.com/drop/superlative-sunshine-01e6c5
-2. Sign in or create a free account
-3. Tap **Claim site** → public URL: https://superlative-sunshine-01e6c5.netlify.app
+Deploys automatically from the `gh-pages` branch when updated after merges to `main`.
 
-**Permanent — GitHub Pages (free):**
-1. Open https://github.com/kaylefo/tr/settings/pages
-2. Source: branch **gh-pages** / **/ (root)**
-3. Save → https://kaylefo.github.io/tr/
+**Alternative — Netlify claim (if you prefer Netlify hosting):**
+1. Open your latest Netlify drop claim link from the repository deploy logs
+2. Sign in or create a free account → **Claim site**
+
+**Alternative — Vercel:**
+1. Open https://vercel.com/new
+2. Import **kaylefo/tr** · Framework: Vite · Build: `npm run build` · Output: `dist`
 
 ## Deploy on Vercel (from your iPhone or any browser)
 
