@@ -1,4 +1,8 @@
-import { VISION_OCR_MIN_CONFIDENCE, VISION_PHOTO_MAX_DIMENSION } from '../../config/vision';
+import {
+  VISION_LIVE_MAX_DIMENSION,
+  VISION_OCR_MIN_CONFIDENCE,
+  VISION_PHOTO_MAX_DIMENSION,
+} from '../../config/vision';
 import type { OcrLineBox } from './ocrMessages';
 
 const JAPANESE_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\u3000-\u303f]/;
@@ -7,8 +11,8 @@ export function containsJapanese(text: string): boolean {
   return JAPANESE_RE.test(text);
 }
 
-export function preprocessCanvas(source: HTMLCanvasElement): ImageData {
-  const maxDim = VISION_PHOTO_MAX_DIMENSION;
+export function preprocessCanvas(source: HTMLCanvasElement, mode: 'photo' | 'live' = 'photo'): ImageData {
+  const maxDim = mode === 'live' ? VISION_LIVE_MAX_DIMENSION : VISION_PHOTO_MAX_DIMENSION;
   let { width, height } = source;
   if (width > maxDim || height > maxDim) {
     const scale = maxDim / Math.max(width, height);
@@ -51,11 +55,11 @@ export function captureVideoFrame(video: HTMLVideoElement): HTMLCanvasElement {
   return canvas;
 }
 
-export function filterOcrLines(lines: OcrLineBox[]): OcrLineBox[] {
+export function filterOcrLines(lines: OcrLineBox[], minConfidence = VISION_OCR_MIN_CONFIDENCE): OcrLineBox[] {
   return lines.filter((line) => {
     const text = line.text.trim();
     if (!text || !containsJapanese(text)) return false;
-    if (line.confidence < VISION_OCR_MIN_CONFIDENCE) return false;
+    if (line.confidence < minConfidence) return false;
     return true;
   });
 }

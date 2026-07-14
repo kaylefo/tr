@@ -1,4 +1,5 @@
-import type { VisionTierId } from '../../config/vision';
+import type { VisionMode, VisionTierId } from '../../config/vision';
+import { VISION_LIVE_MIN_CONFIDENCE } from '../../config/vision';
 import { languagePackManager } from '../languagePack/languagePackManager';
 import { translationService } from '../translation/translationService';
 import { ocrService } from './ocrService';
@@ -15,6 +16,7 @@ import type { PackComponentId } from '../../config/vision';
 import {
   filterOcrLines,
   mergeAdjacentLines,
+  preprocessCanvas,
   type OverlayLabel,
   mapOverlayLabels,
 } from './imageProcessing';
@@ -36,6 +38,7 @@ export class VisionService {
   private activeTierId: VisionTierId | null = null;
   private activeOcrProfile: OcrLangProfile | null = null;
   private translationCache = new Map<string, string>();
+  private warmPromise: Promise<void> | null = null;
 
   async downloadTier(
     tierId: VisionTierId,
@@ -54,32 +57,74 @@ export class VisionService {
     throw new Error('Vision language pack is not ready.');
   }
 
+  async warmUp(tierId: VisionTierId): Promise<void> {
+    if (this.warmPromise) return this.warmPromise;
+
+    this.warmPromise = (async () => {
+      const pack = await getVisionPack(tierId);
+      if (pack.status !== 'ready') return;
+      await translationService.ensureReady();
+      await this.initOcrForTier(tierId);
+    })().finally(() => {
+      this.warmPromise = null;
+    });
+
+    return this.warmPromise;
+  }
+
   async recognizeImage(
     imageData: ImageData,
     tierId: VisionTierId,
     psm: number,
+    mode: VisionMode = 'photo',
   ): Promise<OcrLineBox[]> {
     await this.initOcrForTier(tierId);
     const result = await ocrService.recognize(imageData, psm);
-    return mergeAdjacentLines(filterOcrLines(result.lines));
+    const minConfidence = mode === 'live' ? VISION_LIVE_MIN_CONFIDENCE : undefined;
+    return mergeAdjacentLines(filterOcrLines(result.lines, minConfidence));
   }
 
   async translateLines(lines: OcrLineBox[], isOnline: boolean): Promise<Map<string, string>> {
     const unique = [...new Set(lines.map((l) => l.text.trim()).filter(Boolean))];
     const map = new Map<string, string>();
 
-    for (const source of unique) {
-      const cached = this.translationCache.get(source);
-      if (cached) {
-        map.set(source, cached);
-        continue;
-      }
-      const translation = await translationService.translate(source, isOnline);
-      this.translationCache.set(source, translation);
-      map.set(source, translation);
-    }
+    await Promise.all(
+      unique.map(async (source) => {
+        const cached = this.translationCache.get(source);
+        if (cached) {
+          map.set(source, cached);
+          return;
+        }
+        const translation = await translationService.translate(source, isOnline);
+        this.translationCache.set(source, translation);
+        map.set(source, translation);
+      }),
+    );
 
     return map;
+  }
+
+  async processFrameToOverlays(
+    canvas: HTMLCanvasElement,
+    tierId: VisionTierId,
+    psm: number,
+    mode: VisionMode,
+    displayWidth: number,
+    displayHeight: number,
+    isOnline: boolean,
+  ): Promise<OverlayLabel[]> {
+    await this.warmUp(tierId);
+    const imageData = preprocessCanvas(canvas, mode);
+    const lines = await this.recognizeImage(imageData, tierId, psm, mode);
+    const translations = await this.translateLines(lines, isOnline);
+    return mapOverlayLabels(
+      lines,
+      translations,
+      imageData.width,
+      imageData.height,
+      displayWidth,
+      displayHeight,
+    );
   }
 
   async processImageToOverlays(
@@ -89,8 +134,9 @@ export class VisionService {
     displayWidth: number,
     displayHeight: number,
     isOnline: boolean,
+    mode: VisionMode = 'photo',
   ): Promise<OverlayLabel[]> {
-    const lines = await this.recognizeImage(imageData, tierId, psm);
+    const lines = await this.recognizeImage(imageData, tierId, psm, mode);
     const translations = await this.translateLines(lines, isOnline);
     return mapOverlayLabels(
       lines,

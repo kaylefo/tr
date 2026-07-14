@@ -5,7 +5,6 @@ import { useConnectivity } from '../hooks/useConnectivity';
 import { CameraViewport, TranslationOverlay } from '../components/TranslationOverlay';
 import {
   captureVideoFrame,
-  preprocessCanvas,
   type OverlayLabel,
 } from '../modules/vision/imageProcessing';
 import { getActiveVisionPack, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
@@ -36,6 +35,7 @@ export function SeePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const liveTimerRef = useRef<number | null>(null);
   const scanInFlightRef = useRef(false);
+  const scanGenerationRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -98,27 +98,34 @@ export function SeePage() {
         return;
       }
 
+      const scanId = ++scanGenerationRef.current;
       setScanning(true);
       setError(null);
 
       try {
         await visionService.ensureTierReady(activeTierId, isOnline);
-        const imageData = preprocessCanvas(canvas);
         const viewport = viewportRef.current;
         const displayWidth = viewport?.clientWidth ?? canvas.width;
         const displayHeight = viewport?.clientHeight ?? canvas.height;
 
-        const overlays = await visionService.processImageToOverlays(
-          imageData,
+        const overlays = await visionService.processFrameToOverlays(
+          canvas,
           activeTierId,
           tier.ocrPsm,
+          mode,
           displayWidth,
           displayHeight,
           isOnline,
         );
 
+        if (scanId !== scanGenerationRef.current) return;
+
         setLabels(overlays);
-        setAnnouncement(`${overlays.length} translation overlays updated`);
+        setAnnouncement(
+          overlays.length > 0
+            ? `${overlays.length} translation overlays updated`
+            : 'No Japanese text detected in frame',
+        );
 
         const combinedSource = overlays.map((o) => o.source).join('\n');
         const combinedTranslation = overlays.map((o) => o.translation).join('\n');
@@ -130,7 +137,9 @@ export function SeePage() {
           });
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Vision processing failed');
+        if (scanId === scanGenerationRef.current) {
+          setError(err instanceof Error ? err.message : 'Vision processing failed');
+        }
       } finally {
         setScanning(false);
         scanInFlightRef.current = false;
@@ -234,6 +243,13 @@ export function SeePage() {
     ? packs.find((p) => p.tierId === activeTierId)?.status === 'ready'
     : false;
 
+  useEffect(() => {
+    if (!activeTierId || !activePackReady) return;
+    void visionService.warmUp(activeTierId).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to load vision models');
+    });
+  }, [activeTierId, activePackReady]);
+
   return (
     <section className="page see-page" aria-labelledby="see-heading">
       <header className="page__header">
@@ -319,7 +335,7 @@ export function SeePage() {
 
       <div ref={viewportRef} className="see-viewport-wrap">
         <CameraViewport videoRef={videoRef} mirror={false}>
-          <TranslationOverlay labels={labels} scanning={scanning} />
+          <TranslationOverlay labels={labels} scanning={scanning} live={mode === 'live'} />
         </CameraViewport>
       </div>
 

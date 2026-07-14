@@ -13,6 +13,7 @@ import type {
   OcrResultPayload,
 } from './ocrMessages';
 import { profileToLangs } from './ocrMessages';
+import { parseTesseractPage } from './ocrParse';
 
 type TesseractWorker = Awaited<ReturnType<typeof createWorker>>;
 
@@ -59,33 +60,14 @@ function componentToProfile(componentId: PackComponentId): OcrLangProfile | null
   }
 }
 
-function mapLines(data: {
-  lines?: Array<{
-    text: string;
-    confidence: number;
-    bbox: { x0: number; y0: number; x1: number; y1: number };
-    words?: Array<{
-      text: string;
-      confidence: number;
-      bbox: { x0: number; y0: number; x1: number; y1: number };
-    }>;
-  }>;
-  text?: string;
-}): { lines: OcrLineBox[]; fullText: string } {
-  const lines: OcrLineBox[] = (data.lines ?? [])
-    .filter((line) => line.text?.trim())
-    .map((line) => ({
-      text: line.text.trim(),
-      confidence: line.confidence ?? 0,
-      bbox: line.bbox,
-      words: (line.words ?? []).map((w) => ({
-        text: w.text,
-        confidence: w.confidence ?? 0,
-        bbox: w.bbox,
-      })),
-    }));
-
-  return { lines, fullText: data.text?.trim() ?? lines.map((l) => l.text).join('\n') };
+function mapLinesFromPage(
+  page: Parameters<typeof parseTesseractPage>[0],
+  width: number,
+  height: number,
+): { lines: OcrLineBox[]; fullText: string } {
+  const lines = parseTesseractPage(page, width, height);
+  const fullText = page.text?.trim() ?? lines.map((l) => l.text).join('\n');
+  return { lines, fullText };
 }
 
 function formatOcrStatus(status: string, langs: string): string {
@@ -235,8 +217,8 @@ class OcrService {
       preserve_interword_spaces: '1',
     });
 
-    const result = await this.worker.recognize(canvas);
-    const mapped = mapLines(result.data);
+    const result = await this.worker.recognize(canvas, {}, { blocks: true, text: true });
+    const mapped = mapLinesFromPage(result.data, canvas.width, canvas.height);
 
     return {
       requestId: 0,

@@ -296,7 +296,7 @@ export class TranslationService {
     return next;
   }
 
-  async translate(text: string, isOnline: boolean): Promise<string> {
+  async ensureReady(isOnline = true): Promise<void> {
     const pack = await getJaEnPack();
     if (pack.status !== 'ready') {
       if (!isOnline) {
@@ -308,6 +308,10 @@ export class TranslationService {
     if (!this.workerReady) {
       await this.downloadAndInitialize(isOnline);
     }
+  }
+
+  async translate(text: string, isOnline: boolean): Promise<string> {
+    await this.ensureReady(isOnline);
 
     const requestId = ++this.requestCounter;
     this.latestRequestId = requestId;
