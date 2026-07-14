@@ -12,6 +12,7 @@ function resolveBuildId(): string {
 }
 
 export default defineConfig({
+  base: process.env.GITHUB_PAGES === 'true' ? '/tr/' : '/',
   define: {
     __BUILD_ID__: JSON.stringify(resolveBuildId()),
   },
