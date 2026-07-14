@@ -13,8 +13,9 @@ import type {
   OcrProgressPayload,
   OcrResultPayload,
 } from './ocrMessages';
-import { profileToLangs } from './ocrMessages';
+import { profileToLangPath } from './ocrMessages';
 import { parseTesseractPage } from './ocrParse';
+import { toError, toErrorMessage } from './visionErrors';
 
 type TesseractWorker = Awaited<ReturnType<typeof createWorker>>;
 
@@ -40,11 +41,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-function tesseractCdnOptions() {
+function tesseractCdnOptions(cacheMethod?: 'read' | 'write' | 'refresh' | 'none') {
   return {
     workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@v${TESSERACT_VERSION}/dist/worker.min.js`,
     corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.1.0',
-    gzip: true as const,
+    gzip: false as const,
+    workerBlobURL: true as const,
+    cacheMethod,
   };
 }
 
@@ -76,12 +79,15 @@ function normalizePsm(psm: number): PSM {
   return Object.values(PSM).includes(value) ? value : PSM.AUTO;
 }
 
-function profileFallbackLangs(profile: OcrLangProfile): string[] {
-  const primary = profileToLangs(profile);
-  if (profile === 'jpn-vert' && primary.includes('+')) {
-    return [primary, 'jpn'];
+function profileFallbackLangs(_profile: OcrLangProfile): string[] {
+  return ['jpn'];
+}
+
+function profilePsm(profile: OcrLangProfile, requestedPsm: number): PSM {
+  if (profile === 'jpn-vert') {
+    return normalizePsm(5);
   }
-  return [primary];
+  return normalizePsm(requestedPsm);
 }
 
 function formatOcrStatus(status: string, langs: string): string {
@@ -102,8 +108,8 @@ function formatOcrStatus(status: string, langs: string): string {
 class OcrService {
   private worker: TesseractWorker | null = null;
   private activeProfile: OcrLangProfile | null = null;
-  private activeLangs: string | null = null;
   private initPromise: Promise<void> | null = null;
+  private pendingProfile: OcrLangProfile | null = null;
 
   async downloadComponent(
     componentId: PackComponentId,
@@ -178,41 +184,44 @@ class OcrService {
   private async loadProfile(
     profile: OcrLangProfile,
     onProgress: (payload: OcrProgressPayload) => void,
+    options: { cacheMethod?: 'read' | 'write' | 'refresh' | 'none' } = {},
   ): Promise<void> {
     if (this.worker) {
       await this.worker.terminate();
       this.worker = null;
       this.activeProfile = null;
-      this.activeLangs = null;
     }
 
+    this.pendingProfile = profile;
     const candidates = profileFallbackLangs(profile);
-    let lastError: Error | null = null;
+    let lastError: unknown = null;
 
     for (const langs of candidates) {
       try {
-        await this.createWorker(langs, profile, onProgress);
+        await this.createWorker(langs, profile, onProgress, options.cacheMethod);
         return;
       } catch (err) {
-        lastError = err instanceof Error ? err : new Error('OCR initialization failed');
+        lastError = err;
         await this.dispose();
       }
     }
 
-    throw lastError ?? new Error('OCR initialization failed');
+    throw toError(lastError, 'OCR initialization failed');
   }
 
   private async createWorker(
     langs: string,
     profile: OcrLangProfile,
     onProgress: (payload: OcrProgressPayload) => void,
+    cacheMethod?: 'read' | 'write' | 'refresh' | 'none',
   ): Promise<void> {
     let lastReported = 0;
 
     onProgress({ status: formatOcrStatus('loading tesseract core', langs), progress: 5 });
 
     const worker = await createWorker(langs, 1, {
-      ...tesseractCdnOptions(),
+      ...tesseractCdnOptions(cacheMethod),
+      langPath: profileToLangPath(profile),
       logger: (msg) => {
         const progress =
           typeof msg.progress === 'number'
@@ -233,12 +242,11 @@ class OcrService {
 
     this.worker = worker;
     this.activeProfile = profile;
-    this.activeLangs = langs;
     onProgress({ status: 'OCR ready', progress: 100 });
   }
 
   async recognize(imageData: ImageData, psm: number): Promise<OcrResultPayload> {
-    if (!this.worker) {
+    if (!this.worker || !this.activeProfile) {
       throw new Error('OCR not initialized');
     }
 
@@ -253,9 +261,49 @@ class OcrService {
     if (!ctx) throw new Error('Canvas unavailable');
     ctx.putImageData(imageData, 0, 0);
 
-    const psmValue = normalizePsm(
-      this.activeProfile === 'jpn-vert' && this.activeLangs === 'jpn' ? 5 : psm,
-    );
+    const profile = this.activeProfile;
+    const psmValue = profilePsm(profile, psm);
+
+    try {
+      return await this.recognizeCanvas(canvas, psmValue, { blocks: true, text: true });
+    } catch (firstErr) {
+      console.warn('[OCR] Block recognition failed:', toErrorMessage(firstErr));
+
+      try {
+        return await this.recognizeCanvas(canvas, psmValue, { blocks: false, text: true });
+      } catch (secondErr) {
+        console.warn('[OCR] Text-only recognition failed, reloading OCR:', toErrorMessage(secondErr));
+      }
+
+      const reloadProfile = this.pendingProfile ?? profile;
+      await this.loadProfile(reloadProfile, () => undefined, { cacheMethod: 'refresh' });
+
+      try {
+        return await this.recognizeCanvas(canvas, profilePsm(reloadProfile, psm), {
+          blocks: true,
+          text: true,
+        });
+      } catch (thirdErr) {
+        try {
+          return await this.recognizeCanvas(canvas, profilePsm(reloadProfile, psm), {
+            blocks: false,
+            text: true,
+          });
+        } catch (fourthErr) {
+          throw toError(fourthErr, toErrorMessage(thirdErr, 'OCR failed'));
+        }
+      }
+    }
+  }
+
+  private async recognizeCanvas(
+    canvas: HTMLCanvasElement,
+    psmValue: PSM,
+    output: { blocks: boolean; text: boolean },
+  ): Promise<OcrResultPayload> {
+    if (!this.worker) {
+      throw new Error('OCR not initialized');
+    }
 
     await this.worker.setParameters({
       tessedit_pageseg_mode: psmValue,
@@ -263,7 +311,7 @@ class OcrService {
     });
 
     const result = await withTimeout(
-      this.worker.recognize(canvas, {}, { blocks: true, text: true }),
+      this.worker.recognize(canvas, {}, output),
       VISION_OCR_RECOGNIZE_TIMEOUT_MS,
       'OCR timed out',
     );
@@ -282,7 +330,7 @@ class OcrService {
       this.worker = null;
     }
     this.activeProfile = null;
-    this.activeLangs = null;
+    this.pendingProfile = null;
     this.initPromise = null;
   }
 

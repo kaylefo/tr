@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { computeCoverTransform, mapOverlayLabels } from './imageProcessing';
 import type { OcrLineBox } from './ocrMessages';
 import {
-  VisionPipelineError,
   formatVisionStageError,
   runVisionPipeline,
 } from './visionPipeline';
@@ -109,10 +108,13 @@ describe('runVisionPipeline', () => {
         {
           ensureTierReady: vi.fn().mockResolvedValue({ tierId: 'live' }),
           warmUp: vi.fn().mockResolvedValue(undefined),
-          recognize: vi.fn().mockRejectedValue(new Error('worker dead')),
+          recognize: vi.fn().mockRejectedValue('initialization failed'),
           translateLine: vi.fn(),
         },
       ),
-    ).rejects.toBeInstanceOf(VisionPipelineError);
+    ).rejects.toMatchObject({
+      stage: 'ocr',
+      message: expect.stringContaining('initialization failed'),
+    });
   });
 });

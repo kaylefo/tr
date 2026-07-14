@@ -77,12 +77,20 @@ export type OcrOutbound =
 export function profileToLangs(profile: OcrLangProfile): string {
   switch (profile) {
     case 'jpn-vert':
-      return 'jpn+jpn_vert';
+      // Standard jpn model + vertical PSM is more reliable than jpn+jpn_vert on mobile.
+      return 'jpn';
     case 'jpn-best':
     case 'jpn-fast':
     default:
       return 'jpn';
   }
+}
+
+export function profileToLangPath(profile: OcrLangProfile): string {
+  if (profile === 'jpn-best') {
+    return 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/jpn/4.0.0_best_int';
+  }
+  return 'https://tessdata.projectnaptha.com/4.0.0_fast';
 }
 
 export function profileToTessdata(profile: OcrLangProfile): 'fast' | 'best' {

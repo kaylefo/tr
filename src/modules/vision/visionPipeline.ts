@@ -13,6 +13,7 @@ import {
   type OverlayLabel,
 } from './imageProcessing';
 import type { OcrLineBox } from './ocrMessages';
+import { toErrorMessage } from './visionErrors';
 
 export type VisionStage = 'pack' | 'preprocess' | 'ocr' | 'translate' | 'overlay';
 
@@ -78,7 +79,7 @@ async function runStage<T>(
     return await fn();
   } catch (err) {
     if (isVisionPipelineError(err)) throw err;
-    const detail = err instanceof Error ? err.message : fallbackMessage;
+    const detail = toErrorMessage(err, fallbackMessage);
     throw new VisionPipelineError(stage, formatVisionStageError(stage, detail), err);
   }
 }
