@@ -7,7 +7,7 @@ import {
   captureVideoFrame,
   type OverlayLabel,
 } from '../modules/vision/imageProcessing';
-import { getActiveVisionPack, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
+import { getActiveVisionPackForMode, isVisionPackOperational, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
 import { visionService } from '../modules/vision/visionService';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { TRANSLATION_MODEL_JA_EN } from '../config/app';
@@ -42,13 +42,13 @@ export function SeePage() {
   const reloadPacks = useCallback(async () => {
     const all = await listVisionPacks();
     setPacks(all);
-    const active = await getActiveVisionPack();
+    const active = await getActiveVisionPackForMode(mode);
     setActiveTierId(active?.tierId ?? null);
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     void reloadPacks();
-  }, [reloadPacks]);
+  }, [reloadPacks, mode]);
 
   const stopCamera = useCallback(() => {
     if (liveTimerRef.current) {
@@ -213,6 +213,7 @@ export function SeePage() {
       await visionService.downloadTier(tierId, isOnline, (pack) => {
         setPacks((prev) => prev.map((p) => (p.tierId === pack.tierId ? pack : p)));
       });
+      await visionService.repairTier(tierId);
       await reloadPacks();
       setActiveTierId(tierId);
       setAnnouncement(`${getVisionTier(tierId).label} pack ready`);
@@ -240,7 +241,10 @@ export function SeePage() {
   };
 
   const activePackReady = activeTierId
-    ? packs.find((p) => p.tierId === activeTierId)?.status === 'ready'
+    ? (() => {
+        const pack = packs.find((p) => p.tierId === activeTierId);
+        return pack ? isVisionPackOperational(pack) : false;
+      })()
     : false;
 
   useEffect(() => {

@@ -9,6 +9,7 @@ import {
   allComponentsReady,
   getVisionPack,
   listVisionPacks,
+  repairVisionPack,
   saveVisionPack,
   updateVisionComponent,
   type VisionPackRecord,
@@ -67,6 +68,10 @@ class LanguagePackManager {
   async deleteTranslationPack(): Promise<void> {
     await translationService.deletePack();
     await this.resetTranslationInVisionPacks();
+  }
+
+  async repairTier(tierId: VisionTierId): Promise<VisionPackRecord> {
+    return repairVisionPack(tierId);
   }
 
   downloadVisionTier(

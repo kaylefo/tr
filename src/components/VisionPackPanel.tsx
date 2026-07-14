@@ -1,4 +1,5 @@
 import type { VisionPackRecord } from '../modules/storage/visionPackStore';
+import { isVisionPackOperational } from '../modules/storage/visionPackStore';
 import type { VisionTierId } from '../config/vision';
 import { VISION_TIERS } from '../config/vision';
 
@@ -64,6 +65,7 @@ export function VisionPackPanel({
       {VISION_TIERS.map((tierDef) => {
         const pack = packs.find((p) => p.tierId === tierDef.tierId)!;
         const selected = activeTierId === tierDef.tierId;
+        const packReady = isVisionPackOperational(pack);
         const activeComponent = pack.components.find(
           (c) => c.status === 'downloading' || c.status === 'preparing',
         );
@@ -78,7 +80,7 @@ export function VisionPackPanel({
                 <h4>{tierDef.label}</h4>
                 <p>{tierDef.description}</p>
                 <p className="vision-pack-card__meta">
-                  ~{tierDef.estimatedSizeMb} MB · {statusLabel(pack.status)}
+                  ~{tierDef.estimatedSizeMb} MB · {statusLabel(packReady ? 'ready' : pack.status)}
                 </p>
                 {activeComponent ? (
                   <p className="vision-pack-card__meta" role="status" aria-live="polite">
@@ -90,7 +92,7 @@ export function VisionPackPanel({
                 type="button"
                 className={`chip${selected ? ' chip--active' : ''}`}
                 onClick={() => onSelectTier(tierDef.tierId)}
-                disabled={pack.status !== 'ready'}
+                disabled={!packReady}
               >
                 {selected ? 'Active' : 'Use'}
               </button>
@@ -125,7 +127,7 @@ export function VisionPackPanel({
             {pack.errorMessage ? <p className="notice notice--warn">{pack.errorMessage}</p> : null}
 
             <div className="action-row">
-              {pack.status !== 'ready' ? (
+              {!packReady ? (
                 <button
                   type="button"
                   className="button"

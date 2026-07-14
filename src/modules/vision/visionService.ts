@@ -5,10 +5,12 @@ import { translationService } from '../translation/translationService';
 import { ocrService } from './ocrService';
 import { getJaEnPack } from '../storage/packStore';
 import {
-  allComponentsReady,
   getActiveVisionPack,
-  getVisionPack,
+  getActiveVisionPackForMode,
+  isVisionPackOperational,
   listVisionPacks,
+  pendingVisionComponents,
+  repairVisionPack,
   type VisionPackRecord,
 } from '../storage/visionPackStore';
 import type { OcrLangProfile, OcrLineBox, OcrProgressPayload } from './ocrMessages';
@@ -34,6 +36,15 @@ function componentToOcrProfile(componentId: PackComponentId): OcrLangProfile | n
   }
 }
 
+function formatNotReadyMessage(pack: VisionPackRecord): string {
+  const pending = pendingVisionComponents(pack);
+  if (pending.length === 0) {
+    return 'Vision language pack is not ready. Open Language packs and tap Repair / redownload.';
+  }
+  const names = pending.map((c) => c.label).join(', ');
+  return `Vision language pack is not ready (${names}). Open Language packs and tap Repair / redownload.`;
+}
+
 export class VisionService {
   private activeTierId: VisionTierId | null = null;
   private activeOcrProfile: OcrLangProfile | null = null;
@@ -48,21 +59,30 @@ export class VisionService {
     return languagePackManager.downloadVisionTier(tierId, isOnline, onProgress);
   }
 
+  async repairTier(tierId: VisionTierId): Promise<VisionPackRecord> {
+    return languagePackManager.repairTier(tierId);
+  }
+
   async ensureTierReady(tierId: VisionTierId, isOnline: boolean): Promise<VisionPackRecord> {
-    const pack = await getVisionPack(tierId);
-    if (pack.status === 'ready' && allComponentsReady(pack)) return pack;
+    const pack = await repairVisionPack(tierId);
+
+    if (isVisionPackOperational(pack)) {
+      return pack;
+    }
+
     if (!isOnline) {
       throw new Error('Download the vision language pack while connected.');
     }
-    throw new Error('Vision language pack is not ready.');
+
+    throw new Error(formatNotReadyMessage(pack));
   }
 
   async warmUp(tierId: VisionTierId): Promise<void> {
     if (this.warmPromise) return this.warmPromise;
 
     this.warmPromise = (async () => {
-      const pack = await getVisionPack(tierId);
-      if (pack.status !== 'ready') return;
+      const pack = await repairVisionPack(tierId);
+      if (!isVisionPackOperational(pack)) return;
       await translationService.ensureReady();
       await this.initOcrForTier(tierId);
     })().finally(() => {
@@ -113,6 +133,7 @@ export class VisionService {
     displayHeight: number,
     isOnline: boolean,
   ): Promise<OverlayLabel[]> {
+    await this.ensureTierReady(tierId, isOnline);
     await this.warmUp(tierId);
     const imageData = preprocessCanvas(canvas, mode);
     const lines = await this.recognizeImage(imageData, tierId, psm, mode);
@@ -149,9 +170,9 @@ export class VisionService {
   }
 
   private async initOcrForTier(tierId: VisionTierId): Promise<void> {
-    const pack = await getVisionPack(tierId);
-    if (pack.status !== 'ready') {
-      throw new Error('Vision pack not ready.');
+    const pack = await repairVisionPack(tierId);
+    if (!isVisionPackOperational(pack)) {
+      throw new Error(formatNotReadyMessage(pack));
     }
 
     const ocrComponent = pack.components.find((c) => c.id.startsWith('ocr-') && c.status === 'ready');
@@ -193,6 +214,10 @@ export class VisionService {
 
   async getActivePack(): Promise<VisionPackRecord | null> {
     return getActiveVisionPack();
+  }
+
+  async getActivePackForMode(mode: VisionMode): Promise<VisionPackRecord | null> {
+    return getActiveVisionPackForMode(mode);
   }
 }
 
