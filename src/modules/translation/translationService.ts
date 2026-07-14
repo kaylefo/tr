@@ -1,21 +1,9 @@
 import { TRANSLATION_MODEL_JA_EN } from '../../config/app';
 import {
-  OCR_DOWNLOAD_TIMEOUT_MS,
   PACK_DOWNLOAD_MAX_ATTEMPTS,
   PACK_DOWNLOAD_RETRY_DELAY_MS,
   TRANSLATION_DOWNLOAD_TIMEOUT_MS,
 } from '../../config/languagePack';
-import type { PackComponentId, VisionTierId } from '../../config/vision';
-import {
-  OCR_MESSAGE,
-  profileToLangs,
-  profileToTessdata,
-  type OcrInbound,
-  type OcrLangProfile,
-  type OcrOutbound,
-  type OcrProgressPayload,
-  type OcrResultPayload,
-} from '../vision/ocrMessages';
 import {
   WORKER_MESSAGE,
   normalizeTranslationError,
@@ -28,19 +16,6 @@ import {
 import { getJaEnPack, saveOfflinePack, type OfflinePackRecord } from '../storage/packStore';
 import { normalizeDownloadProgress } from '../languagePack/progress';
 import { Subscribable } from '../languagePack/subscribable';
-
-function componentToOcrProfile(componentId: PackComponentId): OcrLangProfile | null {
-  switch (componentId) {
-    case 'ocr-jpn-fast':
-      return 'jpn-fast';
-    case 'ocr-jpn-best':
-      return 'jpn-best';
-    case 'ocr-jpn-vert':
-      return 'jpn-vert';
-    default:
-      return null;
-  }
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,7 +39,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 export class TranslationService {
   private worker: Worker | null = null;
-  private ocrWorker: Worker | null = null;
   private requestCounter = 0;
   private latestRequestId = 0;
   private initPromise: Promise<OfflinePackRecord> | null = null;
@@ -380,118 +354,6 @@ export class TranslationService {
       downloadedBytes: undefined,
       totalBytes: undefined,
     });
-  }
-
-  private ensureOcrWorker(): Worker {
-    if (!this.ocrWorker) {
-      this.ocrWorker = new Worker(new URL('../../workers/ocr.worker.ts', import.meta.url), {
-        type: 'module',
-      });
-    }
-    return this.ocrWorker;
-  }
-
-  async downloadOcrComponent(
-    componentId: PackComponentId,
-    _tierId: VisionTierId,
-    onProgress: (payload: OcrProgressPayload) => void,
-  ): Promise<void> {
-    const profile = componentToOcrProfile(componentId);
-    if (!profile) throw new Error(`Unknown OCR component ${componentId}`);
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= PACK_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        await withTimeout(
-          this.initOcrProfile(profile, onProgress),
-          OCR_DOWNLOAD_TIMEOUT_MS,
-          'OCR download timed out. Check your connection and retry.',
-        );
-        return;
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error('OCR download failed');
-        await this.disposeOcr();
-        if (attempt < PACK_DOWNLOAD_MAX_ATTEMPTS) {
-          await sleep(PACK_DOWNLOAD_RETRY_DELAY_MS * attempt);
-        }
-      }
-    }
-
-    throw lastError ?? new Error('OCR download failed');
-  }
-
-  private initOcrProfile(
-    profile: OcrLangProfile,
-    onProgress?: (payload: OcrProgressPayload) => void,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const worker = this.ensureOcrWorker();
-
-      const handler = (event: MessageEvent<OcrOutbound>) => {
-        const message = event.data;
-        if (message.type === OCR_MESSAGE.PROGRESS) {
-          onProgress?.(message.payload);
-        }
-        if (message.type === OCR_MESSAGE.READY) {
-          worker.removeEventListener('message', handler);
-          resolve();
-        }
-        if (message.type === OCR_MESSAGE.ERROR && !message.payload.requestId) {
-          worker.removeEventListener('message', handler);
-          reject(new Error(message.payload.message));
-        }
-      };
-
-      worker.addEventListener('message', handler);
-      worker.postMessage({
-        type: OCR_MESSAGE.INIT,
-        payload: {
-          langs: profileToLangs(profile),
-          langProfile: profile,
-          tessdataPath: profileToTessdata(profile),
-        },
-      } satisfies OcrInbound);
-    });
-  }
-
-  async ensureOcrForProfile(profile: OcrLangProfile): Promise<void> {
-    await this.initOcrProfile(profile);
-  }
-
-  async recognizeImage(
-    imageData: ImageData,
-    psm: number,
-  ): Promise<OcrResultPayload> {
-    const worker = this.ensureOcrWorker();
-    const requestId = ++this.requestCounter;
-
-    return new Promise((resolve, reject) => {
-      const handler = (event: MessageEvent<OcrOutbound>) => {
-        const message = event.data;
-        if (message.type === OCR_MESSAGE.RESULT && message.payload.requestId === requestId) {
-          worker.removeEventListener('message', handler);
-          resolve(message.payload);
-        }
-        if (message.type === OCR_MESSAGE.ERROR && message.payload.requestId === requestId) {
-          worker.removeEventListener('message', handler);
-          reject(new Error(message.payload.message));
-        }
-      };
-
-      worker.addEventListener('message', handler);
-      worker.postMessage({
-        type: OCR_MESSAGE.RECOGNIZE,
-        payload: { requestId, imageData, psm },
-      } satisfies OcrInbound);
-    });
-  }
-
-  async disposeOcr(): Promise<void> {
-    if (!this.ocrWorker) return;
-    this.ocrWorker.postMessage({ type: OCR_MESSAGE.DISPOSE } satisfies OcrInbound);
-    this.ocrWorker.terminate();
-    this.ocrWorker = null;
   }
 }
 

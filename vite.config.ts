@@ -78,6 +78,33 @@ export default defineConfig({
             },
           },
           {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@tesseract\.js-data\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tessdata-jsdelivr-v1',
+              expiration: { maxEntries: 24, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/tesseract\.js/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tesseract-js-v1',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/tesseract\.js-core/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tesseract-core-v1',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             urlPattern: /^https:\/\/huggingface\.co\/Xenova\/opus-mt-ja-en\/resolve\//,
             handler: 'CacheFirst',
             options: {

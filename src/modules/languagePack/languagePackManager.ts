@@ -14,6 +14,7 @@ import {
   type VisionPackRecord,
 } from '../storage/visionPackStore';
 import type { OcrProgressPayload } from '../vision/ocrMessages';
+import { ocrService } from '../vision/ocrService';
 import { translationService } from '../translation/translationService';
 import type { WorkerProgressPayload, WorkerReadyPayload } from '../translation/messages';
 import { normalizeDownloadProgress, type NormalizedProgress } from './progress';
@@ -98,7 +99,7 @@ class LanguagePackManager {
           if (componentId === 'translation-ja-en') {
             await this.downloadVisionTranslationComponent(tierId, componentId, onProgress);
           } else {
-            await translationService.downloadOcrComponent(componentId, tierId, (progress) => {
+            await ocrService.downloadComponent(componentId, (progress) => {
               void this.updateVisionOcrProgress(tierId, componentId, progress, onProgress);
             });
           }
@@ -168,7 +169,7 @@ class LanguagePackManager {
       }
     }
 
-    await translationService.disposeOcr();
+    await ocrService.dispose();
 
     const reset = await getVisionPack(tierId);
     await saveVisionPack({
@@ -236,9 +237,13 @@ class LanguagePackManager {
     const current = await getVisionPack(tierId);
     const updated = updateVisionComponent(current, componentId, {
       status: payload.status === 'initializing' ? 'preparing' : 'downloading',
-      progress: payload.progress ?? current.components.find((c) => c.id === componentId)?.progress ?? 0,
+      progress: Math.max(
+        payload.progress ?? 0,
+        current.components.find((c) => c.id === componentId)?.progress ?? 0,
+      ),
       loadedBytes: payload.loaded,
       totalBytes: payload.total,
+      errorMessage: undefined,
     });
     await saveVisionPack(updated);
     this.emitVision(updated, onProgress);

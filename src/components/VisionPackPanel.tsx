@@ -28,6 +28,23 @@ function statusLabel(status: VisionPackRecord['status']): string {
   }
 }
 
+function componentStatusLabel(status: string, progress: number): string {
+  switch (status) {
+    case 'ready':
+      return 'Ready';
+    case 'downloading':
+      return progress > 0 ? `Downloading ${Math.round(progress)}%` : 'Downloading…';
+    case 'preparing':
+      return 'Preparing…';
+    case 'failed':
+      return 'Failed';
+    case 'pending':
+      return 'Waiting';
+    default:
+      return status;
+  }
+}
+
 export function VisionPackPanel({
   packs,
   activeTierId,
@@ -47,6 +64,10 @@ export function VisionPackPanel({
       {VISION_TIERS.map((tierDef) => {
         const pack = packs.find((p) => p.tierId === tierDef.tierId)!;
         const selected = activeTierId === tierDef.tierId;
+        const activeComponent = pack.components.find(
+          (c) => c.status === 'downloading' || c.status === 'preparing',
+        );
+
         return (
           <article
             key={tierDef.tierId}
@@ -59,6 +80,11 @@ export function VisionPackPanel({
                 <p className="vision-pack-card__meta">
                   ~{tierDef.estimatedSizeMb} MB · {statusLabel(pack.status)}
                 </p>
+                {activeComponent ? (
+                  <p className="vision-pack-card__meta" role="status" aria-live="polite">
+                    Current step: {activeComponent.label} — {componentStatusLabel(activeComponent.status, activeComponent.progress)}
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -75,10 +101,12 @@ export function VisionPackPanel({
                 <li key={component.id} className="vision-component">
                   <div className="vision-component__row">
                     <span>{component.label}</span>
-                    <span className="vision-component__status">{component.status}</span>
+                    <span className="vision-component__status">
+                      {componentStatusLabel(component.status, component.progress)}
+                    </span>
                   </div>
                   <div
-                    className="vision-component__bar"
+                    className={`vision-component__bar${component.status === 'downloading' || component.status === 'preparing' ? ' vision-component__bar--active' : ''}`}
                     role="progressbar"
                     aria-valuenow={Math.round(component.progress)}
                     aria-valuemin={0}
@@ -104,7 +132,7 @@ export function VisionPackPanel({
                   disabled={!isOnline || busy}
                   onClick={() => onDownload(tierDef.tierId)}
                 >
-                  Download {tierDef.label} pack
+                  {busy && pack.status === 'downloading' ? 'Downloading…' : `Download ${tierDef.label} pack`}
                 </button>
               ) : (
                 <>

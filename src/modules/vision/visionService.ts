@@ -1,6 +1,7 @@
 import type { VisionTierId } from '../../config/vision';
 import { languagePackManager } from '../languagePack/languagePackManager';
 import { translationService } from '../translation/translationService';
+import { ocrService } from './ocrService';
 import { getJaEnPack } from '../storage/packStore';
 import {
   allComponentsReady,
@@ -59,7 +60,7 @@ export class VisionService {
     psm: number,
   ): Promise<OcrLineBox[]> {
     await this.initOcrForTier(tierId);
-    const result = await translationService.recognizeImage(imageData, psm);
+    const result = await ocrService.recognize(imageData, psm);
     return mergeAdjacentLines(filterOcrLines(result.lines));
   }
 
@@ -118,7 +119,7 @@ export class VisionService {
 
     if (this.activeTierId === tierId && this.activeOcrProfile === profile) return;
 
-    await translationService.ensureOcrForProfile(profile);
+    await ocrService.ensureProfile(profile);
     this.activeTierId = tierId;
     this.activeOcrProfile = profile;
   }
