@@ -3,6 +3,7 @@ import type { CachedRateRecord } from '../currency/types';
 import type { ConversionHistoryItem, TranslationHistoryItem } from './historyStore';
 import type { AppSettings } from './settingsStore';
 import type { OfflinePackRecord } from './packStore';
+import type { VisionPackRecord } from './visionPackStore';
 
 export interface JapanPocketDB extends DBSchema {
   rates: {
@@ -27,10 +28,14 @@ export interface JapanPocketDB extends DBSchema {
     key: string;
     value: OfflinePackRecord;
   };
+  visionPacks: {
+    key: string;
+    value: VisionPackRecord;
+  };
 }
 
 const DB_NAME = 'japan-pocket';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<JapanPocketDB>> | null = null;
 
@@ -55,6 +60,9 @@ export function getDb(): Promise<IDBPDatabase<JapanPocketDB>> {
         if (!db.objectStoreNames.contains('offlinePacks')) {
           db.createObjectStore('offlinePacks');
         }
+        if (!db.objectStoreNames.contains('visionPacks')) {
+          db.createObjectStore('visionPacks');
+        }
       },
     });
   }
@@ -64,7 +72,7 @@ export function getDb(): Promise<IDBPDatabase<JapanPocketDB>> {
 export async function clearAllLocalData(): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(
-    ['rates', 'settings', 'conversionHistory', 'translationHistory', 'offlinePacks'],
+    ['rates', 'settings', 'conversionHistory', 'translationHistory', 'offlinePacks', 'visionPacks'],
     'readwrite',
   );
   await Promise.all([
@@ -73,6 +81,7 @@ export async function clearAllLocalData(): Promise<void> {
     tx.objectStore('conversionHistory').clear(),
     tx.objectStore('translationHistory').clear(),
     tx.objectStore('offlinePacks').clear(),
+    tx.objectStore('visionPacks').clear(),
     tx.done,
   ]);
   localStorage.removeItem('jp-rate-emergency');

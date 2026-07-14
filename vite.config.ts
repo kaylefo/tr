@@ -60,6 +60,24 @@ export default defineConfig({
             },
           },
           {
+            urlPattern: /^https:\/\/tessdata\.projectnaptha\.com\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tessdata-fast-v1',
+              expiration: { maxEntries: 16, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/gh\/tesseract-ocr\/tessdata_best@/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'jp-tessdata-best-v1',
+              expiration: { maxEntries: 16, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             urlPattern: /^https:\/\/huggingface\.co\/Xenova\/opus-mt-ja-en\/resolve\//,
             handler: 'CacheFirst',
             options: {

@@ -54,6 +54,14 @@ test.describe('Japan Pocket', () => {
     await expect(page.getByLabel('Amount in Japanese Yen')).not.toHaveValue('');
   });
 
+  test('navigates to see tab', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'See' }).click();
+    await expect(page.getByRole('heading', { name: 'See' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Live' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Language packs' })).toBeVisible();
+  });
+
   test('navigates to translate and shows pack UI', async ({ page }) => {
     await page.getByRole('button', { name: 'Translate' }).click();
     await expect(page.getByRole('heading', { name: 'Translate' })).toBeVisible();

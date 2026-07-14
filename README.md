@@ -4,6 +4,7 @@
 
 1. A **JPY ↔ USD currency converter** using free public reference rates (no API key).
 2. An **offline Japanese → English translator** that runs entirely on your device after a one-time model download.
+3. A **See** camera tool for photo and live Japanese-to-English overlays using offline OCR and translation packs.
 
 Everything stays on your phone. No account, ads, trackers, or backend server.
 
@@ -11,6 +12,7 @@ Everything stays on your phone. No account, ads, trackers, or backend server.
 
 - **Currency:** The app saves the last successfully fetched reference rate. Offline, it keeps converting with that saved rate and shows “Saved rate” or “Offline rate.” A newly current rate requires internet at least once.
 - **Translation:** After you download and validate the offline pack while online, translation works in airplane mode. Text is never sent to a hosted translation API.
+- **See (camera):** Download a vision language tier in the See tab (Essential, Standard, or Live). Live tier enables continuous camera overlays. OCR and translation run on-device.
 - **First visit:** You need internet once to load the app, fetch a rate, and optionally download the translation model.
 
 ## Live deployment

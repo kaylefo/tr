@@ -133,6 +133,14 @@ export function SettingsPage({
         </button>
       </section>
 
+      <section className="settings-group" aria-labelledby="vision-settings-heading">
+        <h2 id="vision-settings-heading">See (camera translation)</h2>
+        <p className="settings-meta">
+          Manage Essential, Standard, and Live vision language packs in the See tab.
+          Live tier enables continuous camera overlays with vertical Japanese text support.
+        </p>
+      </section>
+
       <section className="settings-group" aria-labelledby="translation-settings-heading">
         <h2 id="translation-settings-heading">Translation</h2>
         <OfflinePackPanel pack={pack} isOnline={isOnline} onPackChange={reload} />

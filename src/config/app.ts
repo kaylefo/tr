@@ -33,7 +33,7 @@ export const TRANSLATION_TEST_SENTENCE = 'これはいくらですか？';
 
 export const TRANSLATION_TEST_MIN_LENGTH = 2;
 
-export type MainTab = 'convert' | 'translate' | 'history' | 'settings';
+export type MainTab = 'convert' | 'see' | 'translate' | 'history' | 'settings';
 
 export type AppearanceMode = 'system' | 'light' | 'dark';
 

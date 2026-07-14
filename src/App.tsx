@@ -13,6 +13,9 @@ import { useExchangeRate } from './hooks/useExchangeRate';
 const TranslatePage = lazy(() =>
   import('./pages/TranslatePage').then((m) => ({ default: m.TranslatePage })),
 );
+const SeePage = lazy(() =>
+  import('./pages/SeePage').then((m) => ({ default: m.SeePage })),
+);
 const HistoryPage = lazy(() =>
   import('./pages/HistoryPage').then((m) => ({ default: m.HistoryPage })),
 );
@@ -58,6 +61,11 @@ export default function App() {
             defaultFeePercent={settings.defaultFeePercent}
             autoRefreshEnabled={settings.autoRefreshRate}
           />
+        ) : null}
+        {tab === 'see' ? (
+          <Suspense fallback={<p className="loading">Loading camera translator…</p>}>
+            <SeePage />
+          </Suspense>
         ) : null}
         {tab === 'translate' ? (
           <Suspense fallback={<p className="loading">Loading translator…</p>}>
