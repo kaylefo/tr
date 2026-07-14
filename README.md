@@ -13,6 +13,20 @@ Everything stays on your phone. No account, ads, trackers, or backend server.
 - **Translation:** After you download and validate the offline pack while online, translation works in airplane mode. Text is never sent to a hosted translation API.
 - **First visit:** You need internet once to load the app, fetch a rate, and optionally download the translation model.
 
+## Live deployment
+
+**Temporary (verified now):** https://clips-powered-treasure-next.trycloudflare.com
+
+**Permanent — claim on Netlify (free, ~1 minute from iPhone):**
+1. Open https://app.netlify.com/drop/superlative-sunshine-01e6c5
+2. Sign in or create a free account
+3. Tap **Claim site** → public URL: https://superlative-sunshine-01e6c5.netlify.app
+
+**Permanent — GitHub Pages (free):**
+1. Open https://github.com/kaylefo/tr/settings/pages
+2. Source: branch **gh-pages** / **/ (root)**
+3. Save → https://kaylefo.github.io/tr/
+
 ## Deploy on Vercel (from your iPhone or any browser)
 
 1. Push this repository to GitHub (already done if you imported it).
