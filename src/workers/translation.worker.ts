@@ -4,6 +4,7 @@ import {
   type TranslationPipeline,
 } from '@huggingface/transformers';
 import {
+  TRANSLATION_MODEL_JA_EN,
   TRANSLATION_TEST_MIN_LENGTH,
   TRANSLATION_TEST_SENTENCE,
 } from '../config/app';
@@ -37,8 +38,11 @@ if (env.backends?.onnx?.wasm) {
 let translator: TranslationPipeline | null = null;
 let executionMode: 'webgpu' | 'wasm' = 'wasm';
 let activeModelId = '';
+let preferWebGpuPref = true;
 let cancelledRequestId: number | null = null;
 let messageChain: Promise<void> = Promise.resolve();
+/** Shared init promise so concurrent cold-start requests do not duplicate pipeline creation. */
+let initInFlight: Promise<TranslationPipeline> | null = null;
 
 function post(message: WorkerOutbound): void {
   self.postMessage(message);
@@ -96,6 +100,25 @@ async function createPipelineWithFallback(
   return buildPipeline(modelId, 'wasm');
 }
 
+async function ensureTranslator(modelId: string, preferWebGpu: boolean): Promise<TranslationPipeline> {
+  if (translator && activeModelId === modelId) return translator;
+  if (initInFlight) return initInFlight;
+
+  preferWebGpuPref = preferWebGpu;
+  initInFlight = (async () => {
+    const pipe = await createPipelineWithFallback(modelId, preferWebGpu);
+    translator = pipe;
+    activeModelId = modelId;
+    return pipe;
+  })();
+
+  try {
+    return await initInFlight;
+  } finally {
+    initInFlight = null;
+  }
+}
+
 async function validateModel(pipe: TranslationPipeline): Promise<string> {
   postProgress({ status: 'validating', progress: 99 });
   const result = await pipe(TRANSLATION_TEST_SENTENCE);
@@ -107,21 +130,11 @@ async function validateModel(pipe: TranslationPipeline): Promise<string> {
 }
 
 async function handleInit(modelId: string, preferWebGpu: boolean): Promise<void> {
-  if (translator && activeModelId === modelId) {
-    post({
-      type: WORKER_MESSAGE.READY,
-      payload: {
-        modelId,
-        executionMode,
-        validatedAt: Date.now(),
-      },
-    });
-    return;
+  const alreadyReady = !!translator && activeModelId === modelId;
+  const pipe = await ensureTranslator(modelId, preferWebGpu);
+  if (!alreadyReady) {
+    await validateModel(pipe);
   }
-
-  translator = await createPipelineWithFallback(modelId, preferWebGpu);
-  activeModelId = modelId;
-  await validateModel(translator);
 
   post({
     type: WORKER_MESSAGE.READY,
@@ -135,6 +148,20 @@ async function handleInit(modelId: string, preferWebGpu: boolean): Promise<void>
 
 async function handleTranslate(requestId: number, text: string): Promise<void> {
   if (!translator) {
+    try {
+      await ensureTranslator(activeModelId || TRANSLATION_MODEL_JA_EN, preferWebGpuPref);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Model unavailable';
+      post({
+        type: WORKER_MESSAGE.ERROR,
+        payload: { requestId, code: 'CACHE_REMOVED', message },
+      });
+      return;
+    }
+  }
+
+  const activeTranslator = translator;
+  if (!activeTranslator) {
     post({
       type: WORKER_MESSAGE.ERROR,
       payload: {
@@ -173,7 +200,7 @@ async function handleTranslate(requestId: number, text: string): Promise<void> {
         payload: { status: 'translating' },
       });
 
-      const result = await translator(segment.text);
+      const result = await activeTranslator(segment.text);
       translations.push(extractTranslationText(result));
     }
 
@@ -226,23 +253,25 @@ self.addEventListener('message', (event: MessageEvent<WorkerInbound>) => {
         case WORKER_MESSAGE.DISPOSE:
           translator = null;
           activeModelId = '';
+          initInFlight = null;
           break;
         case WORKER_MESSAGE.HEALTH:
-          if (translator && activeModelId) {
+          try {
+            await ensureTranslator(activeModelId || TRANSLATION_MODEL_JA_EN, preferWebGpuPref);
             post({
               type: WORKER_MESSAGE.READY,
               payload: {
-                modelId: activeModelId,
+                modelId: activeModelId || TRANSLATION_MODEL_JA_EN,
                 executionMode,
                 validatedAt: Date.now(),
               },
             });
-          } else {
+          } catch (err) {
             post({
               type: WORKER_MESSAGE.ERROR,
               payload: {
-                code: 'PACK_MISSING',
-                message: 'Model not loaded',
+                code: 'CACHE_REMOVED',
+                message: err instanceof Error ? err.message : 'Model unavailable',
               },
             });
           }

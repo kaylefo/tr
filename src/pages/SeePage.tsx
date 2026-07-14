@@ -10,6 +10,7 @@ import {
 import { isVisionPipelineError } from '../modules/vision/visionPipeline';
 import { getActiveVisionPackForMode, isVisionPackOperational, listVisionPacks, type VisionPackRecord } from '../modules/storage/visionPackStore';
 import { visionService } from '../modules/vision/visionService';
+import { translationService } from '../modules/translation/translationService';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { TRANSLATION_MODEL_JA_EN } from '../config/app';
 import { VISION_VIDEO_FRAME_TIMEOUT_MS } from '../config/languagePack';
@@ -50,6 +51,7 @@ export function SeePage() {
 
   useEffect(() => {
     void reloadPacks();
+    void translationService.warmUp();
   }, [reloadPacks, mode]);
 
   const stopCamera = useCallback(() => {

@@ -48,23 +48,26 @@ export function segmentJapaneseText(input: string, maxChars = MAX_SEGMENT_CHARS)
   return segments;
 }
 
-function findSplitIndex(text: string, maxChars: number): number {
-  const boundaries = ['。', '！', '？', '、', '．', '.', '!', '?', '；', ';', '」', '』', '）', ')'];
-  let best = -1;
+const SENTENCE_BOUNDARIES = new Set([
+  '。', '！', '？', '、', '．', '.', '!', '?', '；', ';', '」', '』', '）', ')',
+]);
 
-  for (let i = Math.min(maxChars, text.length - 1); i >= Math.floor(maxChars * 0.5); i--) {
-    const code = text.charCodeAt(i);
-    if (boundaries.includes(text[i])) {
-      best = i + 1;
-      break;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      continue;
+function findSplitIndex(text: string, maxChars: number): number {
+  const start = Math.min(maxChars, text.length - 1);
+  const floor = Math.floor(maxChars * 0.5);
+
+  for (let i = start; i >= floor; i--) {
+    if (SENTENCE_BOUNDARIES.has(text[i])) {
+      return i + 1;
     }
   }
 
-  if (best > 0) return best;
-  return maxChars;
+  let fallback = maxChars;
+  const code = text.charCodeAt(fallback - 1);
+  if (code >= 0xd800 && code <= 0xdbff) {
+    fallback -= 1;
+  }
+  return Math.max(1, fallback);
 }
 
 export function reassembleTranslation(

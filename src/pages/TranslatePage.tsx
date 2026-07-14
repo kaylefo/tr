@@ -4,7 +4,7 @@ import { useConnectivity } from '../hooks/useConnectivity';
 import { addTranslationHistory } from '../modules/storage/historyStore';
 import { getJaEnPack, type OfflinePackRecord } from '../modules/storage/packStore';
 import { languagePackManager } from '../modules/languagePack/languagePackManager';
-import { translationService } from '../modules/translation/translationService';
+import { TranslationError, translationService } from '../modules/translation/translationService';
 import { normalizeTranslationError } from '../modules/translation/messages';
 
 const OfflinePackPanel = lazy(() =>
@@ -29,6 +29,7 @@ export function TranslatePage() {
 
   useEffect(() => {
     void loadPack();
+    void translationService.warmUp();
     const unsubs = [
       languagePackManager.subscribeTranslationReady(() => {
         void loadPack();
@@ -66,6 +67,9 @@ export function TranslatePage() {
           });
         }
       } catch (err) {
+        if (err instanceof TranslationError && err.code === 'CANCELLED') {
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Translation failed');
       } finally {
         setTranslating(false);
